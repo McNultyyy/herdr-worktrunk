@@ -57,12 +57,17 @@ $layout = Get-WorktrunkFzfLayout
 # last-line parse below lands on it). Falls back to a plain read if fzf isn't on PATH.
 if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
   $header = "$WtEnterKey on a match $WtArrow switch $WtDot type a new name + $WtEnterKey $WtArrow create from $createBaseLabel $WtDot alt-$WtEnterKey $WtArrow force typed name $WtDot esc $WtArrow cancel"
-  $seen = @{}
+  # Ordinal comparer: branch names are case-sensitive, and a PowerShell
+  # hashtable would fold 'Feature' into 'feature'.
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
   $choice = & {
       # Refs first: `git for-each-ref` answers instantly and in refname order,
       # while `wt list` stats every checkout - seconds on a repo with many
       # worktrees. Drop origin/HEAD: its short form is bare "origin", so filter
       # on the full refname (refs/remotes/origin/HEAD), then emit the short name.
+      # Unlike the bash pipeline (where SIGPIPE kills these producers the moment
+      # fzf exits), an early pick waits for `wt list` to finish before the
+      # switch runs - a known trade-off on repos with very many worktrees.
       git for-each-ref --format='%(refname) %(refname:short)' @branchRefs 2>$null | ForEach-Object {
         $parts = $_ -split ' ', 2
         if ($parts.Count -eq 2 -and $parts[0] -notmatch '/HEAD$') { $parts[1] }
@@ -74,7 +79,7 @@ if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
         } catch {}
       }
     } |
-    ForEach-Object { if (-not $seen.ContainsKey($_)) { $seen[$_] = $true; $_ } } |
+    ForEach-Object { if ($seen.Add($_)) { $_ } } |
     fzf --print-query --reverse --info=inline @layout `
         --bind=alt-enter:print-query `
         --prompt="worktree $WtChevron " `
@@ -112,6 +117,14 @@ if ($openMode -eq 'tab') {
   # Preserve the original behavior: run wt in a new tab so the user lands (and
   # stays) in the worktree. The sent command is PowerShell syntax; herdr's
   # default Windows shell is PowerShell-family.
+  #
+  # A missing workspace id must fail here: PowerShell drops a null argument
+  # from a native argv entirely, so herdr would misparse `--workspace --cwd`.
+  if (-not $env:HERDR_WORKSPACE_ID) {
+    Write-WtError 'no HERDR_WORKSPACE_ID for tab mode (popup pickers need it handed down by the action)'
+    Start-Sleep -Seconds 2
+    exit 1
+  }
   $tabJson = & $herdr tab create --workspace $env:HERDR_WORKSPACE_ID --cwd "$PWD" --label $name `
     --env "WT_PICKER_NAME=$name" --focus | Out-String
   $rootPane = $null
@@ -140,13 +153,17 @@ if ($openMode -eq 'tab') {
   # The sent command: switch without cd-ing (there is no shell integration to do
   # it), then cd into the path worktrunk reports, then relabel the tab with the
   # real branch $name resolved to, keeping the typed name alongside in parens
-  # (e.g. "feat/eager-worktree-focus (pr:16)") when it differs.
+  # (e.g. "feat/eager-worktree-focus (pr:16)") when it differs. The command must
+  # contain no double quotes: Windows PowerShell does not escape embedded quotes
+  # when it builds a native command line, so herdr would receive it split into
+  # several argv elements - hence the label is built by concatenation.
   $wtCmd = "`$json = & $qWt switch $switchArgs --no-cd --format=json; " +
     "if (`$LASTEXITCODE -eq 0) { " +
     "try { `$r = ConvertFrom-Json -InputObject ([string]::Join([Environment]::NewLine, @(`$json))); " +
     "if (`$r.path) { Set-Location -LiteralPath `$r.path } } catch {}; " +
     "`$branch = git branch --show-current; " +
-    "if (`$branch -ceq `$env:WT_PICKER_NAME) { `$label = `$branch } else { `$label = `"`$branch (`$(`$env:WT_PICKER_NAME))`" }; " +
+    "if (`$branch -ceq `$env:WT_PICKER_NAME) { `$label = `$branch } " +
+    "else { `$label = `$branch + ' (' + `$env:WT_PICKER_NAME + ')' }; " +
     "& $qHerdr tab rename $qTabId `$label }"
 
   # pane run sends the command to the tab's interactive shell; the terminal

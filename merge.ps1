@@ -58,9 +58,11 @@ $name = Invoke-WorktrunkPickBranch $cands "merge worktree $WtChevron " `
 if (-not $name) { exit 0 }    # esc / no selection -> cancel
 
 # Path and native herdr workspace (if open) of the worktree we're about to
-# merge. Both have to be resolved before the removal below destroys them.
+# merge, and the main checkout to step into while it goes away. All have to be
+# resolved before the removal below destroys them.
 $wtPath = Get-WorktrunkWorktreePath $wtItems $name
 $wsid = Get-WorktrunkOpenWorkspaceId $wtPath
+$mainPath = Get-WorktrunkMainPath $wtItems
 
 # -C runs the merge as if from the picked worktree, so the pane never has to be
 # in it. --no-remove because wt merge's own removal runs in the background,
@@ -79,7 +81,7 @@ if ($LASTEXITCODE -ne 0) {
 # remove closes the worktree's herdr UI first (Windows can't delete a process's
 # cwd) and reopens it when the removal fails - the workspace still holds a
 # live worktree in that case.
-if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath)) {
+if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath)) {
   [Console]::Out.Write("`n$WtEsc[31mmerged, but wt remove failed (see above).$WtEsc[0m press any key to close")
   Wait-WtAnyKey
   exit 0

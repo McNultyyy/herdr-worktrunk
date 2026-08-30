@@ -41,6 +41,14 @@ function Get-WorktrunkWorktreePath($Items, [string]$Branch) {
   return $null
 }
 
+# The path of the main checkout, or $null.
+function Get-WorktrunkMainPath($Items) {
+  foreach ($item in $Items) {
+    if ($item.kind -ceq 'worktree' -and $item.is_main -eq $true -and $item.path) { return $item.path }
+  }
+  return $null
+}
+
 # The id of the native herdr workspace open on the worktree at PATH, or '' (tab
 # mode, or a worktree herdr never opened as a workspace). Resolve this before
 # the worktree is destroyed - herdr forgets the mapping along with it. Paths are
@@ -77,45 +85,73 @@ function Invoke-WorktrunkPickBranch($Candidates, [string]$Prompt, [string]$Heade
 # (or its tab-mode panes) is exactly such a process - so unlike the Unix
 # scripts, the UI has to close BEFORE `wt remove` deletes the checkout, not
 # after. When worktrunk then refuses or fails, the workspace is reopened so a
-# failed removal doesn't also cost the user their UI.
-function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [string]$WtPath) {
+# failed removal doesn't also cost the user their UI (closed tab-mode panes
+# have no such undo - their shells are gone).
+function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [string]$WtPath, [string]$MainPath) {
   $herdr = $env:HERDR_BIN_PATH
   if (-not $herdr) { $herdr = 'herdr' }
 
-  Close-WorktrunkWorktreeUi $WorkspaceId $WtPath
-  # The closed panes' shells need a moment to exit and release their cwd locks.
-  Start-Sleep -Seconds 2
+  # This script itself holds a cwd lock when its pane was opened inside the
+  # worktree being removed - step out to the main checkout first.
+  if ((Test-WtPathPrefix "$PWD" $WtPath) -and $MainPath -and (Test-Path -LiteralPath $MainPath)) {
+    Set-Location -LiteralPath $MainPath
+  }
+
+  # Closing the workspace this script's own pane lives in would kill the script
+  # before the removal happens - close that workspace only AFTER a successful
+  # removal, and close just its other panes (the cwd-lock holders) up front.
+  $closeSelfAfter = ($WorkspaceId -and $env:HERDR_WORKSPACE_ID -and
+    $WorkspaceId -eq $env:HERDR_WORKSPACE_ID)
+  if ($closeSelfAfter) {
+    $closed = Close-WorktrunkWorktreeUi '' $WtPath
+  } else {
+    $closed = Close-WorktrunkWorktreeUi $WorkspaceId $WtPath
+  }
+  if ($closed -gt 0) {
+    # The closed panes' shells need a moment to exit and release their cwd locks.
+    Start-Sleep -Seconds 2
+  }
 
   & $WtBin remove --foreground $Branch
-  if ($LASTEXITCODE -eq 0) { return $true }
+  if ($LASTEXITCODE -eq 0) {
+    if ($closeSelfAfter) {
+      # Kills this very pane; nothing may follow this line.
+      & $herdr workspace close $WorkspaceId | Out-Host
+    }
+    return $true
+  }
 
-  if ($WorkspaceId -and (Test-Path -LiteralPath $WtPath)) {
+  if ($WorkspaceId -and -not $closeSelfAfter -and (Test-Path -LiteralPath $WtPath)) {
     & $herdr worktree open --cwd "$PWD" --path $WtPath --no-focus | Out-Null
   }
   return $false
 }
 
-# Close the herdr UI a destroyed worktree left behind: its native workspace as a
-# unit, or - for the original tab-based mode and worktrees opened by older
-# plugin versions - the panes sitting in it. Leaves the calling pane alone.
+# Close the herdr UI a worktree leaves behind: its native workspace as a unit,
+# or - for the original tab-based mode and worktrees opened by older plugin
+# versions - the panes sitting in it. Leaves the calling pane alone. Returns
+# how many things it closed, so callers know whether shells need time to exit.
 function Close-WorktrunkWorktreeUi([string]$WorkspaceId, [string]$WtPath) {
   $herdr = $env:HERDR_BIN_PATH
   if (-not $herdr) { $herdr = 'herdr' }
 
   if ($WorkspaceId) {
-    & $herdr workspace close $WorkspaceId
-    return
+    & $herdr workspace close $WorkspaceId | Out-Host
+    return 1
   }
 
-  if (Test-WtRootPath $WtPath) { return }
+  if (Test-WtRootPath $WtPath) { return 0 }
 
   $json = & $herdr pane list 2>$null | Out-String
-  try { $panes = (ConvertFrom-Json -InputObject $json).result.panes } catch { return }
+  try { $panes = (ConvertFrom-Json -InputObject $json).result.panes } catch { return 0 }
 
+  $count = 0
   foreach ($pane in @($panes)) {
     if ($pane.pane_id -eq $env:HERDR_PANE_ID) { continue }
     if (Test-WtPathPrefix $pane.cwd $WtPath) {
-      & $herdr pane close $pane.pane_id
+      & $herdr pane close $pane.pane_id | Out-Host
+      $count++
     }
   }
+  return $count
 }

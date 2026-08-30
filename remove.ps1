@@ -35,16 +35,18 @@ $name = Invoke-WorktrunkPickBranch $cands "remove worktree $WtChevron " `
   "$WtEnterKey to remove (worktrunk will ask to confirm) $WtDot esc to cancel"
 if (-not $name) { exit 0 }    # esc / no selection -> cancel
 
-# Path and native herdr workspace (if open) of the worktree we're about to remove.
+# Path and native herdr workspace (if open) of the worktree we're about to
+# remove, and the main checkout to step into while it goes away.
 $wtPath = Get-WorktrunkWorktreePath $wtItems $name
 $wsid = Get-WorktrunkOpenWorkspaceId $wtPath
+$mainPath = Get-WorktrunkMainPath $wtItems
 
 # wt remove prompts for approval itself, refuses unmerged branches without -D,
 # and refuses worktrees with untracked files without -f - so run it
 # interactively and let worktrunk gate the destructive bits. --foreground keeps
 # the pane until it's done. The guarded remove closes the worktree's herdr UI
 # first (Windows can't delete a process's cwd) and reopens it on failure.
-if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath)) {
+if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath)) {
   [Console]::Out.Write("`n$WtEsc[31mwt remove failed (see above).$WtEsc[0m press any key to close")
   Wait-WtAnyKey
   exit 0

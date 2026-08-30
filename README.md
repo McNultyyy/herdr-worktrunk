@@ -143,7 +143,8 @@ popup does not need, so the list fills the popup frame herdr already draws.
 
 ## Requirements
 
-- [**herdr**](https://herdr.dev) ≥ 0.7.0
+- [**herdr**](https://herdr.dev) ≥ 0.8.0 (the manifest relies on per-item
+  `platforms` overrides)
 - [**worktrunk**](https://github.com/max-sixty/worktrunk) ≥ 0.60.0 — the `wt` CLI on your `PATH`
 - **fzf** — the interactive picker
 - **jq** — JSON parsing (macOS/Linux only; the Windows scripts parse JSON natively)
@@ -179,7 +180,10 @@ Two Windows behaviors differ by design:
   process's cwd — and the worktree's own workspace pane is exactly such a
   process. The remove and merge actions therefore close the worktree's herdr
   UI *before* `wt remove` runs (the reverse of the Unix scripts), and reopen
-  the workspace if the removal then fails or is declined.
+  the workspace if the removal then fails or is declined. Panes closed in tab
+  mode cannot be brought back that way — decline a removal there and its
+  shells stay closed. When the action runs from inside the worktree's own
+  workspace, that workspace is closed only after the removal succeeds.
 - **Tab mode** (`open_mode = "tab"`) sends a PowerShell command into the new
   tab, so it expects a PowerShell-family default shell. It does not rely on
   worktrunk's shell integration: the sent command switches with `--no-cd` and

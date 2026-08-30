@@ -39,19 +39,28 @@ function Wait-WtAnyKey {
 }
 
 # Print the configured value for KEY from the plugin's managed config.toml, or
-# '' when unset. Accepts both quoted strings (open_mode = "tab") and bare TOML
-# scalars (show_remote_branches = false); the last occurrence wins, like the
-# sed | tail -n1 in config.sh.
+# '' when unset. Accepts double-quoted strings (open_mode = "tab"),
+# single-quoted TOML literals (worktrunk_bin = 'C:\path\to\wt.exe' - the
+# natural form for Windows paths, since literals need no backslash escaping),
+# and bare TOML scalars (show_remote_branches = false); the last occurrence
+# wins, like the sed | tail -n1 in config.sh.
 function Get-WorktrunkConfigValue([string]$Key) {
-  if (-not $env:HERDR_PLUGIN_CONFIG_DIR) { return '' }
-  $configFile = Join-Path $env:HERDR_PLUGIN_CONFIG_DIR 'config.toml'
+  $configDir = $env:HERDR_PLUGIN_CONFIG_DIR
+  if (-not $configDir) { return '' }
+  # Like HERDR_PLUGIN_ROOT, the config dir may arrive in extended-length form
+  # (\\?\C:\...), which Join-Path rejects in Windows PowerShell.
+  if ($configDir.StartsWith('\\?\UNC\')) { $configDir = '\\' + $configDir.Substring(8) }
+  elseif ($configDir.StartsWith('\\?\')) { $configDir = $configDir.Substring(4) }
+  $configFile = Join-Path $configDir 'config.toml'
   if (-not (Test-Path -LiteralPath $configFile)) { return '' }
 
   $value = ''
-  $pattern = '^\s*' + [regex]::Escape($Key) + '\s*=\s*("([^"]*)"|([^\s#"]+))\s*(#.*)?$'
+  $pattern = '^\s*' + [regex]::Escape($Key) + '\s*=\s*("([^"]*)"|''([^'']*)''|([^\s#"'']+))\s*(#.*)?$'
   foreach ($line in (Get-Content -LiteralPath $configFile)) {
     if ($line -match $pattern) {
-      if ($Matches.ContainsKey(2)) { $value = $Matches[2] } else { $value = $Matches[3] }
+      if ($Matches.ContainsKey(2)) { $value = $Matches[2] }
+      elseif ($Matches.ContainsKey(3)) { $value = $Matches[3] }
+      else { $value = $Matches[4] }
     }
   }
   return $value

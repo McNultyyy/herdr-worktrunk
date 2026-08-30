@@ -91,6 +91,25 @@ try {
   # Flags the merger owns can't be overridden from config.
   Set-Content -LiteralPath $configFile -Value 'merge_flags = "--no-remove --format=json -C /tmp --yes"'
   Assert-Eq '' ((Get-WorktrunkMergeFlags) -join ' ') 'merge_flags'
+
+  # Single-quoted TOML literals are the natural form for Windows paths (no
+  # backslash escaping) - including ones with spaces - and must not keep their
+  # quotes. Double-quoted and bare values still work alongside.
+  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = 'C:\path\to\wt.exe'"
+  Assert-Eq 'C:\path\to\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
+  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = 'C:\Program Files\worktrunk\wt.exe' # literal"
+  Assert-Eq 'C:\Program Files\worktrunk\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
+  Set-Content -LiteralPath $configFile -Value 'worktrunk_bin = "C:\\tools\\wt.exe"'
+  Assert-Eq 'C:\\tools\\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
+  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = ''"
+  Assert-Eq '' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
+
+  # herdr may hand the config dir over in extended-length form (\\?\C:\...),
+  # like it does the plugin root; values must still be found.
+  Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'
+  $env:HERDR_PLUGIN_CONFIG_DIR = '\\?\' + $configDir
+  Assert-Eq 'tab' (Get-WorktrunkOpenMode) 'mode'
+  $env:HERDR_PLUGIN_CONFIG_DIR = $configDir
 } finally {
   Remove-Item -Recurse -Force -LiteralPath $configDir -ErrorAction SilentlyContinue
 }

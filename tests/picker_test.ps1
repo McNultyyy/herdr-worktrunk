@@ -34,8 +34,10 @@ try {
   )
 
   # wt stub: `list` feeds the picker, `switch` records the argv under test.
+  # PR-42 next to pr-42 checks that dedup keeps branches that differ only in
+  # case - they are distinct git refs.
   $listFile = Join-Path $stubDir 'wt-list.json'
-  Set-Content -LiteralPath $listFile -Value '[{"branch":"silas/foo-bar","path":"/tmp/a","kind":"worktree"},{"branch":"pr-42","path":"/tmp/b","kind":"worktree"}]'
+  Set-Content -LiteralPath $listFile -Value '[{"branch":"silas/foo-bar","path":"/tmp/a","kind":"worktree"},{"branch":"pr-42","path":"/tmp/b","kind":"worktree"},{"branch":"PR-42","path":"/tmp/c","kind":"worktree"}]'
   $switchJson = Join-Path $stubDir 'wt-switch.json'
   @{ branch = 'x'; path = (Join-Path $stubDir 'checkout') } | ConvertTo-Json -Compress |
     Set-Content -LiteralPath $switchJson
@@ -136,7 +138,7 @@ try {
   # sorting, so the picker fills in before worktrunk has finished stat-ing
   # every checkout.
   $stdin = @(Get-Content -LiteralPath (Join-Path $stubDir 'fzf.stdin') -ErrorAction SilentlyContinue) -join "`n"
-  Assert-Eq "main`nsilas/foo-bar`npr-42" $stdin 'candidate list'
+  Assert-Eq "main`nsilas/foo-bar`npr-42`nPR-42" $stdin 'candidate list'
 } finally {
   $env:Path = $origPath
   foreach ($name in 'STUB_DIR', 'WT_STUB_LIST_FILE', 'WT_STUB_SWITCH_JSON', 'HERDR_WORKTREE_JSON',

@@ -159,6 +159,25 @@ try {
   if (-not $reopened) {
     Fail "expected the workspace to be reopened after a failed removal, got:`n$(@(Get-LogLines $herdrLog) -join "`n")"
   }
+  $env:WT_STUB_REMOVE_STATUS = '0'
+
+  # Acting on the worktree whose workspace this very script runs in: closing
+  # that workspace first would kill the script, so it closes only once the
+  # removal has succeeded...
+  $env:HERDR_WORKSPACE_ID = 'ws-feature'
+  [void](Invoke-Merge)
+  Assert-Log wt 'remove --foreground feature' $wtLog
+  Assert-Log herdr 'workspace close ws-feature' $herdrLog
+  Refute-Log herdr 'worktree open' $herdrLog
+
+  # ...and a failed removal there neither closes nor reopens it.
+  $env:WT_STUB_REMOVE_STATUS = '1'
+  [void](Invoke-Merge)
+  Assert-Log wt 'remove --foreground feature' $wtLog
+  Refute-Log herdr 'workspace close' $herdrLog
+  Refute-Log herdr 'worktree open' $herdrLog
+  $env:WT_STUB_REMOVE_STATUS = '0'
+  Remove-Item Env:\HERDR_WORKSPACE_ID -ErrorAction SilentlyContinue
 } finally {
   $env:Path = $origPath
   foreach ($name in 'WORKTRUNK_BIN', 'WT_STUB_LOG', 'WT_STUB_LIST_FILE', 'WT_STUB_MERGE_STATUS',
