@@ -15,6 +15,15 @@ source "$plugin_root/config.sh"
 cwd=$(jq -r '.workspace_cwd // .focused_pane_cwd' <<<"$HERDR_PLUGIN_CONTEXT_JSON")
 herdr=${HERDR_BIN_PATH:-herdr}
 
+# A link handler invokes the action with the clicked URL in the same context, so
+# the issue/PR number is lifted out of it here and handed to the picker, which
+# then skips its list entirely. Absent for a menu or keybinding invocation.
+clicked_url=$(jq -r '.clicked_url // empty' <<<"$HERDR_PLUGIN_CONTEXT_JSON")
+prefill=""
+if [[ $clicked_url =~ /(issues|pull|merge_requests)/([0-9]+) ]]; then
+  prefill=${BASH_REMATCH[2]}
+fi
+
 args=(plugin pane open
   --plugin "${HERDR_PLUGIN_ID:-worktrunk}"
   --entrypoint "$entrypoint"
@@ -36,5 +45,7 @@ if [[ $(worktrunk_picker_placement) == popup ]]; then
 else
   args+=(--placement split --direction down)
 fi
+
+[[ -n $prefill ]] && args+=(--env "WT_PICKER_PREFILL=$prefill")
 
 exec "$herdr" "${args[@]}"

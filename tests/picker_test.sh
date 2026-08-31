@@ -38,6 +38,25 @@ printf '%s ' "$@" > "$STUB_DIR/wt.args"
 printf '{"branch":"%s","path":"%s"}\n' "${2:-}" "$STUB_DIR/checkout"
 EOF
 
+# gh stub: the two list commands feed the issue/PR pickers, and `issue view`
+# answers the title lookup for an issue number typed rather than picked.
+cat > "$stub_dir/gh" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == issue && ${2:-} == list ]]; then
+  printf '%s\n' "$GH_STUB_ISSUES"
+  exit 0
+fi
+if [[ ${1:-} == pr && ${2:-} == list ]]; then
+  printf '%s\n' "$GH_STUB_PRS"
+  exit 0
+fi
+if [[ ${1:-} == issue && ${2:-} == view ]]; then
+  printf '%s\n' "$GH_STUB_TITLE"
+  exit 0
+fi
+exit 1
+EOF
+
 # herdr stub: `worktree list` locates the repo root, `worktree open` is the result.
 cat > "$stub_dir/herdr" <<'EOF'
 #!/usr/bin/env bash
@@ -48,11 +67,15 @@ fi
 printf '%s ' "$@" > "$STUB_DIR/herdr.args"
 EOF
 
-chmod +x "$stub_dir/fzf" "$stub_dir/wt" "$stub_dir/herdr"
+chmod +x "$stub_dir/fzf" "$stub_dir/wt" "$stub_dir/herdr" "$stub_dir/gh"
 
 # Two worktree branches from `wt list`, one of them already a local head.
 wt_list='[{"branch":"silas/foo-bar","path":"/tmp/a","kind":"worktree"},
           {"branch":"pr-42","path":"/tmp/b","kind":"worktree"}]'
+
+gh_issues='#42  Fix the thing
+#9  Old work'
+gh_prs='#16  feat/eager-worktree-focus  Eager worktree focus'
 
 run_picker() {
   local out=$1 exit_code=$2
@@ -70,6 +93,11 @@ run_picker() {
     HERDR_BIN_PATH="$stub_dir/herdr" \
     HERDR_PLUGIN_CONFIG_DIR="$config_dir" \
     HERDR_WORKSPACE_ID=w1 \
+    GH_BIN="$stub_dir/gh" \
+    GH_STUB_ISSUES="$gh_issues" \
+    GH_STUB_PRS="$gh_prs" \
+    GH_STUB_TITLE="Add a widget" \
+    WT_PICKER_PREFILL="${WT_PICKER_PREFILL:-}" \
       bash "$repo_root/picker.sh" "$@" >/dev/null 2>&1
   )
 }
@@ -124,5 +152,47 @@ assert_contains '--bind=alt-enter:print-query' "$(cat "$stub_dir/fzf.args")" 'fz
 # Refs are offered before the slow `wt list` source and deduped without sorting, so
 # the picker fills in before worktrunk has finished stat-ing every checkout.
 assert_eq $'main\nsilas/foo-bar\npr-42' "$(cat "$stub_dir/fzf.stdin")" 'candidate list'
+
+# --- issue and PR sources ----------------------------------------------------
+# (after the branch-source assertions: the extra branch below would otherwise
+# show up in the branch picker's candidate list)
+
+# An issue with no branch yet is created under the configured template, with the
+# number kept in the name so worktrunk hooks keyed on `issue-N` still fire.
+run_picker '#42  Fix the thing' 0 --source=issues
+assert_eq 'switch --create feature/issue-42-fix-the-thing --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# gh's lines are what the picker offers, verbatim.
+assert_eq "$gh_issues" "$(cat "$stub_dir/fzf.stdin")" 'issue candidate list'
+
+# An issue that already has a branch is switched to, never created again.
+git -C "$work_dir/repo" branch feature/issue-9-old
+run_picker '#9  Old work' 0 --source=issues
+assert_eq 'switch feature/issue-9-old --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# A number typed rather than picked (fzf exits 1) carries no title, so the slug
+# comes from `gh issue view`.
+run_picker '77' 1 --source=issues
+assert_eq 'switch --create feature/issue-77-add-a-widget --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# A configured template is honored, including one that leaves no slug.
+printf 'issue_branch_template = "wt/{{number}}"\n' > "$config_dir/config.toml"
+run_picker '#42  Fix the thing' 0 --source=issues
+assert_eq 'switch --create wt/42 --no-cd --format=json ' "$(wt_args)" 'wt argv'
+rm -f "$config_dir/config.toml"
+
+# A PR goes through worktrunk's own pr:N shortcut, which handles fork PRs and
+# pushRemote — so it is passed as-is, never with --create.
+run_picker '#16  feat/eager-worktree-focus  Eager worktree focus' 0 --source=prs
+assert_eq 'switch pr:16 --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# A link handler prefills the number, so the picker skips fzf entirely — the
+# scripted fzf abort below would cancel the run if it were consulted.
+WT_PICKER_PREFILL=16 run_picker '' 130 --source=prs
+assert_eq 'switch pr:16 --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# The prefill only applies to the gh sources; the branch picker still asks.
+WT_PICKER_PREFILL=16 run_picker '' 130
+assert_eq '' "$(wt_args)" 'wt argv'
 
 printf 'picker_test: ok\n'

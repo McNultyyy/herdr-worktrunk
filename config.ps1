@@ -149,3 +149,46 @@ function Get-WorktrunkMergeFlags {
   # Unrolled on return; callers collect with @(Get-WorktrunkMergeFlags).
   return $flags
 }
+
+# The branch name template for a worktree created from a GitHub issue.
+# {{number}} and {{slug}} are substituted; the slug comes from the issue title.
+# Keyed off the issue number so hooks that key on `issue-N` (a task brief, say)
+# fire for these worktrees too. A template without {{number}} would collapse
+# every issue onto one branch, so it is refused rather than honored.
+function Get-WorktrunkIssueBranchTemplate {
+  $default = 'feature/issue-{{number}}-{{slug}}'
+  $value = Get-WorktrunkConfigValue 'issue_branch_template'
+  if ($value -ceq '') { return $default }
+  if ($value -notmatch '\{\{\s*number\s*\}\}') {
+    Write-WtWarning "issue_branch_template `"$value`" has no {{number}} placeholder; using `"$default`""
+    return $default
+  }
+  return $value
+}
+
+# How many issues/PRs to ask `gh` for. gh's own default is 30; 50 fills a picker
+# without making the list feel truncated. Capped at four digits: the list is
+# fuzzy-searched, not paged, and gh fetches every page up to the limit.
+function Get-WorktrunkGhListLimit {
+  $value = Get-WorktrunkConfigValue 'gh_list_limit'
+  if ($value -ceq '') { return 50 }
+  if ($value -match '^[1-9][0-9]{0,3}$') { return [int]$value }
+  Write-WtWarning "unsupported gh_list_limit `"$value`"; using 50"
+  return 50
+}
+
+# Which issues/PRs the picker lists: everything open (the default), the ones
+# assigned to you, or the ones you opened. KEY is issue_filter or pr_filter.
+# A fixed set rather than free-form gh flags: the value is passed to gh as argv.
+function Get-WorktrunkGhFilter([string]$Key) {
+  $value = Get-WorktrunkConfigValue $Key
+  switch ($value) {
+    { $_ -ceq '' -or $_ -ceq 'all' } { return 'all' }
+    { $_ -ceq 'assigned' } { return 'assigned' }
+    { $_ -ceq 'created' } { return 'created' }
+    default {
+      Write-WtWarning "unsupported $Key `"$value`"; listing all open items"
+      return 'all'
+    }
+  }
+}

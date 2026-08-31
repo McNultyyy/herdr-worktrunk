@@ -39,6 +39,21 @@ try {
   foreach ($ref in @('does-not-exist', 'origin/nope')) {
     if (Test-WorktrunkRefExists $ref) { Fail "expected '$ref' not to be an existing ref" }
   }
+
+  # Find-WtIssueBranch is what makes the issue action "open OR create": it finds
+  # the branch already carrying the issue number, local first, then remote.
+  git branch work/issue-42-old-work
+  git update-ref refs/remotes/origin/issue-7-remote HEAD
+  $found = Find-WtIssueBranch '42'
+  if ($found -cne 'work/issue-42-old-work') { Fail "expected the local issue-42 branch, got '$found'" }
+  $found = Find-WtIssueBranch '7'
+  if ($found -cne 'origin/issue-7-remote') { Fail "expected the remote issue-7 branch, got '$found'" }
+  # issue-4 must not match issue-42, and an issue with no branch finds none.
+  foreach ($number in @('4', '2', '99')) {
+    $found = Find-WtIssueBranch $number
+    if ($found -cne '') { Fail "expected no branch for issue $number, got '$found'" }
+  }
+  if ((Find-WtIssueBranch 'not-a-number') -cne '') { Fail 'expected a non-numeric issue to find nothing' }
 } finally {
   Pop-Location
   Remove-Item -Recurse -Force -LiteralPath $sandbox -ErrorAction SilentlyContinue
@@ -94,6 +109,32 @@ foreach ($root in @('/', 'C:', 'C:\', 'c:/', '')) {
   if (-not (Test-WtRootPath $root)) { Fail "expected '$root' to be treated as a root path" }
 }
 if (Test-WtRootPath 'C:\repo') { Fail 'expected a real path not to be treated as a root' }
+
+# Issue title -> branch-safe slug, and the branch name built from it.
+if ((ConvertTo-WtSlug 'Fix THE thing!') -cne 'fix-the-thing') { Fail 'expected a lowercased, dashed slug' }
+if ((ConvertTo-WtSlug '  a  &  b  ') -cne 'a-b') { Fail 'expected runs of punctuation folded to one dash and trimmed' }
+if ((ConvertTo-WtSlug '***') -cne '') { Fail 'expected a title with nothing sluggable to give an empty slug' }
+# Truncation lands on a dash boundary rather than leaving a trailing separator.
+if ((ConvertTo-WtSlug 'one two three' 8) -cne 'one-two') { Fail 'expected the truncated slug to lose its trailing dash' }
+
+if ((New-WtIssueBranchName 'feature/issue-{{number}}-{{slug}}' '42' 'fix-it') -cne 'feature/issue-42-fix-it') {
+  Fail 'expected both placeholders filled in'
+}
+if ((New-WtIssueBranchName 'wt/{{ number }}-{{ slug }}' '42' 'fix-it') -cne 'wt/42-fix-it') {
+  Fail 'expected placeholders with inner whitespace filled in'
+}
+# An empty slug would otherwise leave the separator dangling.
+if ((New-WtIssueBranchName 'feature/issue-{{number}}-{{slug}}' '42' '') -cne 'feature/issue-42') {
+  Fail 'expected a dangling separator trimmed for an unsluggable title'
+}
+
+# GH_BIN wins over PATH lookup, which is how the tests stub gh.
+$env:GH_BIN = 'C:\stub\gh.exe'
+try {
+  if ((Get-GhBin) -cne 'C:\stub\gh.exe') { Fail 'expected GH_BIN to win' }
+} finally {
+  Remove-Item Env:\GH_BIN -ErrorAction SilentlyContinue
+}
 
 Write-Output 'helpers tests passed'
 exit 0

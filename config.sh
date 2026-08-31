@@ -146,3 +146,67 @@ worktrunk_merge_flags() {
     esac
   done
 }
+
+# Print the branch name template for a worktree created from a GitHub issue.
+# {{number}} and {{slug}} are substituted; the slug comes from the issue title.
+# Keyed off the issue number so hooks that key on `issue-N` (a task brief, say)
+# fire for these worktrees too. A template without {{number}} would collapse
+# every issue onto one branch, so it is refused rather than honored.
+worktrunk_issue_branch_template() {
+  local value default='feature/issue-{{number}}-{{slug}}'
+
+  value=$(worktrunk_config_value issue_branch_template)
+
+  if [[ -z $value ]]; then
+    printf '%s\n' "$default"
+  elif [[ $value =~ \{\{[[:space:]]*number[[:space:]]*\}\} ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '\033[33mWarning:\033[0m issue_branch_template %q has no {{number}} placeholder; using %q\n' \
+      "$value" "$default" >&2
+    printf '%s\n' "$default"
+  fi
+}
+
+# Print how many issues/PRs to ask `gh` for. gh's own default is 30; 50 fills a
+# picker without making the list feel truncated. Capped at four digits: the list
+# is fuzzy-searched, not paged, and gh fetches every page up to the limit.
+worktrunk_gh_list_limit() {
+  local value
+
+  value=$(worktrunk_config_value gh_list_limit)
+
+  if [[ -z $value ]]; then
+    printf '%s\n' 50
+  elif [[ $value =~ ^[1-9][0-9]{0,3}$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '\033[33mWarning:\033[0m unsupported gh_list_limit %q; using 50\n' "$value" >&2
+    printf '%s\n' 50
+  fi
+}
+
+# Print which issues/PRs the picker lists: everything open (the default), the
+# ones assigned to you, or the ones you opened. KEY is issue_filter or pr_filter.
+# A fixed set rather than free-form gh flags: the value is passed to gh as argv.
+worktrunk_gh_filter() {
+  local key=$1 value
+
+  value=$(worktrunk_config_value "$key")
+
+  case "$value" in
+    ""|all)
+      printf '%s\n' all
+      ;;
+    assigned)
+      printf '%s\n' assigned
+      ;;
+    created)
+      printf '%s\n' created
+      ;;
+    *)
+      printf '\033[33mWarning:\033[0m unsupported %s %q; listing all open items\n' "$key" "$value" >&2
+      printf '%s\n' all
+      ;;
+  esac
+}

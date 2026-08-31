@@ -22,7 +22,7 @@ resulting worktree opens as a tab or as a native linked-worktree workspace.
 
 ## What it does
 
-Six workspace actions:
+Eight workspace actions:
 
 - **Worktree: switch / create from default branch** — opens an fzf picker over
   your existing worktrees and local branches without worktrees (remote-tracking
@@ -42,6 +42,16 @@ Six workspace actions:
 The pickers support [worktrunk syntax for PR/MR along with other shortcuts](https://worktrunk.dev/switch/#shortcuts).
 Worktrunk's lifecycle hooks run in either presentation mode, and the checkout
 opens as a tab or a native worktree workspace according to plugin configuration.
+
+- **Worktree: open / create from a GitHub issue** — an fzf picker over the
+  repository's open issues (`gh issue list`). Picking one switches to the branch
+  that already carries that issue number, or creates a new branch named from the
+  issue's number and title. See
+  [GitHub issues and pull requests](#github-issues-and-pull-requests).
+
+- **Worktree: open / create from a pull request** — the same picker over open
+  pull requests (`gh pr list`), then `wt switch pr:N`, so worktrunk handles fork
+  PRs and `pushRemote` itself.
 
 - **Worktree: remove** — opens an fzf picker over removable worktrees
   (everything except the main checkout). Pick one; worktrunk prompts for
@@ -112,6 +122,58 @@ Accepted: `--no-squash`, `--no-rebase`, `--no-ff`, `--no-commit`, `--no-hooks`,
 A merge that fails leaves the worktree and its workspace alone, with worktrunk's
 output on screen.
 
+## GitHub issues and pull requests
+
+The two GitHub actions need the [GitHub CLI](https://cli.github.com) on `PATH`
+and authenticated (`gh auth login`); nothing else in the plugin does, so they
+report a missing or unauthenticated `gh` in the picker pane rather than being
+hidden. On Windows, or when `gh` lives somewhere unusual, point at it
+explicitly:
+
+```toml
+gh_bin = 'C:\path\to\gh.exe'
+```
+
+**Pull requests** go through worktrunk's own `pr:N` shortcut, which resolves the
+head branch, fetches `refs/pull/N/head` for a fork PR, and sets `pushRemote`.
+
+**Issues** have no worktrunk shortcut, so the picker resolves one itself:
+
+1. If a local branch already carries that issue number (`issue-42`, `issue_42`
+   or `issue42` as a whole token — `issue-4` never matches `issue-42`), the
+   picker switches to it. A remote-tracking branch is the next choice.
+2. Otherwise it creates a branch from the issue's number and title:
+   `feature/issue-42-the-issue-title`. The title is lowercased, punctuation runs
+   fold to single dashes, and it is trimmed to 36 characters on a dash boundary.
+
+That is what makes the action *open or create*: running it twice for the same
+issue lands you back in the first worktree instead of creating a near-duplicate.
+Keeping the number in the branch name is also what lets worktrunk hooks keyed on
+`issue-N` (a task brief, say) fire for these worktrees.
+
+Both pickers also accept a typed number for an item the list does not show (a
+closed issue, or one beyond the fetch limit), and still pass any worktrunk
+shortcut or branch name through untouched.
+
+Four settings, all optional:
+
+```toml
+issue_branch_template = "feature/issue-{{number}}-{{slug}}"  # the default
+gh_list_limit = 50        # how many issues/PRs to fetch
+issue_filter = "all"      # all | assigned | created
+pr_filter = "all"         # all | assigned | created
+```
+
+`{{number}}` and `{{slug}}` are the only placeholders. A template without
+`{{number}}` is refused — it would collapse every issue onto one branch — and a
+title that slugs to nothing leaves no dangling separator behind.
+
+### Ctrl+click an issue or PR link
+
+The plugin also registers link handlers, so Ctrl+clicking a GitHub issue or pull
+request URL in any pane opens the worktree for it directly, skipping the picker.
+The URL's number is handed to the same flows described above.
+
 ## Picker presentation
 
 The picker opens in a split pane below the workspace. To open it as a
@@ -148,6 +210,9 @@ popup does not need, so the list fills the popup frame herdr already draws.
 - [**worktrunk**](https://github.com/max-sixty/worktrunk) ≥ 0.60.0 — the `wt` CLI on your `PATH`
 - **fzf** — the interactive picker
 - **jq** — JSON parsing (macOS/Linux only; the Windows scripts parse JSON natively)
+- [**gh**](https://cli.github.com) — the GitHub CLI, authenticated with
+  `gh auth login`. Needed only by the two GitHub actions; every other action
+  works without it.
 - **bash** — the scripts run with `/bin/bash` (macOS/Linux only)
 
 Platforms: macOS, Linux, and Windows (herdr's Windows plugin support is in
@@ -162,6 +227,8 @@ the two external tools with winget:
 ```powershell
 winget install max-sixty.worktrunk junegunn.fzf
 ```
+
+Add `GitHub.cli` to that list to use the issue and pull request actions.
 
 Worktrunk's binary is named `wt.exe`, which collides with Windows Terminal's
 `wt.exe` launcher alias — and the alias usually wins on `PATH`. The plugin
@@ -207,9 +274,10 @@ herdr plugin link /path/to/herdr-worktrunk
 ## Usage
 
 On Windows, append `-windows` to every action id below (`open-windows`,
-`open-current-windows`, `open-with-remotes-windows`, `remove-windows`,
-`merge-windows`, `merge-no-squash-windows`) — they are the same actions backed
-by the PowerShell scripts.
+`open-current-windows`, `open-with-remotes-windows`, `from-issue-windows`,
+`from-pr-windows`, `remove-windows`, `merge-windows`,
+`merge-no-squash-windows`) — they are the same actions backed by the PowerShell
+scripts.
 
 ### Create/Switch a worktree from the default branch
 
@@ -227,6 +295,18 @@ herdr plugin action invoke open-current --plugin worktrunk
 
 ```
 herdr plugin action invoke open-with-remotes --plugin worktrunk
+```
+
+### Open/Create a worktree from a GitHub issue
+
+```
+herdr plugin action invoke from-issue --plugin worktrunk
+```
+
+### Open/Create a worktree from a pull request
+
+```
+herdr plugin action invoke from-pr --plugin worktrunk
 ```
 
 ### Remove Worktree
@@ -266,6 +346,19 @@ type = "plugin_action"
 command = "worktrunk.open-with-remotes"
 description = "Worktree: switch / create from local or remote branches"
 
+# Optional: the GitHub issue and pull request pickers.
+[[keys.command]]
+key = "prefix+shift+i"
+type = "plugin_action"
+command = "worktrunk.from-issue"
+description = "Worktree: open / create from a GitHub issue"
+
+[[keys.command]]
+key = "prefix+shift+p"
+type = "plugin_action"
+command = "worktrunk.from-pr"
+description = "Worktree: open / create from a pull request"
+
 [[keys.command]]
 key = "prefix+shift+d"
 type = "plugin_action"
@@ -284,8 +377,9 @@ binds `prefix+shift+g` to "new worktree" by default, and a custom keybinding tak
 precedence over the built-in on the same key — so mapping `worktrunk.open`
 to `prefix+shift+g` replaces it with worktrunk's switch/create picker, hooks
 included. Pick matching keys for `worktrunk.open-current`,
-`worktrunk.open-with-remotes`, `worktrunk.remove`, `worktrunk.merge`, and
-`worktrunk.merge-no-squash` to round out the workflow.
+`worktrunk.open-with-remotes`, `worktrunk.from-issue`, `worktrunk.from-pr`,
+`worktrunk.remove`, `worktrunk.merge`, and `worktrunk.merge-no-squash` to round
+out the workflow.
 
 Reload the config after editing it:
 

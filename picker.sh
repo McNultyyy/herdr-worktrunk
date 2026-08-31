@@ -4,10 +4,17 @@
 # output happen in the pane you keep, not in this transient picker pane. The new tab
 # runs your interactive shell, so its `wt` function cd's into the worktree and sticks.
 
+source_kind="branches"
 create_base=""
 create_base_label="default branch"
 case ${1:-} in
   ""|--create-base=default|--show-with-remotes)
+    ;;
+  --source=issues)
+    source_kind="issues"
+    ;;
+  --source=prs)
+    source_kind="prs"
     ;;
   --create-base=current)
     create_base="@"
@@ -44,36 +51,122 @@ fi
 
 worktrunk_fzf_layout
 
-# fzf over existing worktree branches; --print-query returns a typed-but-unmatched
-# name so we can create it, and alt-↵ (print-query) forces the typed name even when
-# it fuzzy-matches an existing branch (fzf then prints only the query, so the
-# last-line parse below lands on it). Falls back to a plain read if fzf isn't on PATH.
-if command -v fzf >/dev/null; then
+# Each source decides what the picker lists and how a pick reads back. The
+# branch picker offers refs and worktree branches; the gh pickers offer issues
+# or pull requests as "#N  context" lines whose leading number is parsed below.
+if [[ $source_kind == branches ]]; then
+  fzf_prompt='worktree ❯ '
+  header="↵ on a match → switch · type a new name + ↵ → create from ${create_base_label} · alt-↵ → force typed name · esc → cancel"
+  read_prompt="Branch (existing → switch · new → create from ${create_base_label}): "
+  candidates() {
+    # Refs first: `git for-each-ref` answers instantly and in refname order,
+    # while `wt list` stats every checkout — seconds on a repo with many
+    # worktrees. Drop origin/HEAD: its short form is bare "origin", so filter
+    # on the full refname (refs/remotes/origin/HEAD), then emit the short name.
+    git for-each-ref --format='%(refname) %(refname:short)' "${branch_refs[@]}" 2>/dev/null \
+      | awk '$1 !~ /\/HEAD$/ {print $2}'
+    wt list --format=json 2>/dev/null \
+      | worktrunk_list_items \
+      | jq -r 'select(.branch != null) | .branch'
+  }
+else
+  # Issues and pull requests come from the GitHub CLI, which carries its own jq,
+  # so gh formats the lines rather than this script parsing JSON.
+  gh_bin=$(worktrunk_gh_bin)
+  if [[ -z $gh_bin ]]; then
+    printf '\033[31m%s\033[0m\n' 'GitHub CLI not found. Install it (https://cli.github.com), run `gh auth login`, and either put it on PATH as `gh` or set gh_bin in the plugin config.toml / the GH_BIN environment variable.' >&2
+    sleep 2
+    exit 1
+  fi
+  gh_limit=$(worktrunk_gh_list_limit)
+  if [[ $source_kind == issues ]]; then
+    noun="issue"
+    gh_filter=$(worktrunk_gh_filter issue_filter)
+    gh_args=(issue list --limit "$gh_limit" --json number,title
+             --jq '.[] | "#\(.number)  \(.title)"')
+  else
+    noun="pr"
+    gh_filter=$(worktrunk_gh_filter pr_filter)
+    gh_args=(pr list --limit "$gh_limit" --json number,headRefName,title
+             --jq '.[] | "#\(.number)  \(.headRefName)  \(.title)"')
+  fi
+  case $gh_filter in
+    assigned) gh_args+=(--assignee '@me') ;;
+    created) gh_args+=(--author '@me') ;;
+  esac
+
+  # Fetched up front instead of streamed into fzf: these lists are small, and a
+  # gh failure (not authenticated, no GitHub remote) has to be readable rather
+  # than showing up as an empty picker.
+  if ! gh_out=$("$gh_bin" "${gh_args[@]}" 2>&1); then
+    printf '\033[31m%s\033[0m\n' "gh ${gh_args[0]} list failed:" >&2
+    printf '%s\n' "$gh_out" >&2
+    printf '\npress any key to close'
+    read -n1
+    exit 1
+  fi
+  fzf_prompt="${noun} ❯ "
+  header="↵ → open or create the worktree for that ${noun} · type a number + ↵ → use it directly · esc → cancel"
+  read_prompt="${noun} number: "
+  candidates() {
+    [[ -n $gh_out ]] && printf '%s\n' "$gh_out"
+  }
+fi
+
+# A link handler hands the picker the number it parsed out of the clicked URL,
+# so Ctrl+clicking an issue/PR link skips the list entirely.
+prefill=""
+[[ $source_kind != branches ]] && prefill=${WT_PICKER_PREFILL:-}
+
+# fzf over the candidates; --print-query returns a typed-but-unmatched entry so we
+# can create it, and alt-↵ (print-query) forces the typed name even when it
+# fuzzy-matches an existing one (fzf then prints only the query, so the last-line
+# parse below lands on it). Falls back to a plain read if fzf isn't on PATH.
+if [[ -n $prefill ]]; then
+  name=$prefill
+elif command -v fzf >/dev/null; then
   choice=$(
-    {
-      # Refs first: `git for-each-ref` answers instantly and in refname order,
-      # while `wt list` stats every checkout — seconds on a repo with many
-      # worktrees. Drop origin/HEAD: its short form is bare "origin", so filter
-      # on the full refname (refs/remotes/origin/HEAD), then emit the short name.
-      git for-each-ref --format='%(refname) %(refname:short)' "${branch_refs[@]}" 2>/dev/null \
-        | awk '$1 !~ /\/HEAD$/ {print $2}'
-      wt list --format=json 2>/dev/null \
-        | worktrunk_list_items \
-        | jq -r 'select(.branch != null) | .branch'
-    } | awk '!seen[$0]++ { print; fflush() }' \
+    candidates | awk '!seen[$0]++ { print; fflush() }' \
       | fzf --print-query --reverse --info=inline "${WORKTRUNK_FZF_LAYOUT[@]}" \
             --bind=alt-enter:print-query \
-            --prompt='worktree ❯ ' \
-            --header="↵ on a match → switch · type a new name + ↵ → create from ${create_base_label} · alt-↵ → force typed name · esc → cancel"
+            --prompt="$fzf_prompt" \
+            --header="$header"
   )
   ret=$?
   [[ $ret -gt 1 ]] && exit 0      # 130 = esc/abort → cancel (0 = picked, 1 = typed-new)
   name=${choice##*$'\n'}          # last line: the selection if any, else the typed query
 else
-  printf 'Branch (existing → switch · new → create from %s): ' "$create_base_label"
+  printf '%s' "$read_prompt"
   read -r name
 fi
 [[ -z $name ]] && exit 0
+
+# Map a picked issue/PR onto something `wt switch` understands. A PR has a native
+# worktrunk shortcut — pr:N, which also handles fork PRs and sets pushRemote. An
+# issue has none, so it resolves to the branch that already exists for it, or to
+# a new name built from the configured template: that is what makes the action
+# "open OR create", and it keeps the issue number in the branch so worktrunk
+# hooks keyed on `issue-N` still fire. Anything that isn't a number (a typed
+# pr:16, ^, or a branch name) falls through to the branch handling untouched.
+if [[ $source_kind != branches && $name =~ ^[[:space:]]*#?([0-9]+)([[:space:]]+(.*))?$ ]]; then
+  number=${BASH_REMATCH[1]}
+  title=${BASH_REMATCH[3]}
+  if [[ $source_kind == prs ]]; then
+    name="pr:$number"
+  else
+    existing=$(worktrunk_find_issue_branch "$number")
+    if [[ -n $existing ]]; then
+      name=$existing
+    else
+      # Typed or prefilled rather than picked, so no list line carried a title.
+      if [[ -z $title ]]; then
+        title=$("$gh_bin" issue view "$number" --json title --jq '.title' 2>/dev/null) || title=""
+      fi
+      name=$(worktrunk_issue_branch_name \
+        "$(worktrunk_issue_branch_template)" "$number" "$(worktrunk_slug "$title")")
+    fi
+  fi
+fi
 
 open_mode=$(worktrunk_open_mode)
 

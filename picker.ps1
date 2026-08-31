@@ -8,10 +8,13 @@
 # on worktrunk's shell integration to cd), the sent command switches with
 # --no-cd --format=json and Set-Locations into the reported path itself.
 
+$source = 'branches'
 $createBase = ''
 $createBaseLabel = 'default branch'
 switch ([string]$args[0]) {
   { $_ -in '', '--create-base=default', '--show-with-remotes' } { break }
+  '--source=issues' { $source = 'issues'; break }
+  '--source=prs' { $source = 'prs'; break }
   '--create-base=current' {
     $createBase = '@'
     $currentBranch = git branch --show-current 2>$null
@@ -51,16 +54,14 @@ if ([string]$args[0] -eq '--show-with-remotes' -or (Get-WorktrunkShowRemoteBranc
 
 $layout = Get-WorktrunkFzfLayout
 
-# fzf over existing worktree branches; --print-query returns a typed-but-unmatched
-# name so we can create it, and alt-enter (print-query) forces the typed name even
-# when it fuzzy-matches an existing branch (fzf then prints only the query, so the
-# last-line parse below lands on it). Falls back to a plain read if fzf isn't on PATH.
-if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
+# Each source decides what the picker lists and how a pick reads back. The
+# branch picker offers refs and worktree branches; the gh pickers offer issues
+# or pull requests as "#N  context" lines whose leading number is parsed below.
+if ($source -eq 'branches') {
+  $fzfPrompt = "worktree $WtChevron "
   $header = "$WtEnterKey on a match $WtArrow switch $WtDot type a new name + $WtEnterKey $WtArrow create from $createBaseLabel $WtDot alt-$WtEnterKey $WtArrow force typed name $WtDot esc $WtArrow cancel"
-  # Ordinal comparer: branch names are case-sensitive, and a PowerShell
-  # hashtable would fold 'Feature' into 'feature'.
-  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
-  $choice = & {
+  $readPrompt = "Branch (existing $WtArrow switch $WtDot new $WtArrow create from $createBaseLabel)"
+  $candidates = {
       # Refs first: `git for-each-ref` answers instantly and in refname order,
       # while `wt list` stats every checkout - seconds on a repo with many
       # worktrees. Drop origin/HEAD: its short form is bare "origin", so filter
@@ -78,11 +79,66 @@ if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
           Get-WorktrunkListItems $wtJson | Where-Object { $null -ne $_.branch } | ForEach-Object { $_.branch }
         } catch {}
       }
-    } |
+    }
+} else {
+  # Issues and pull requests come from the GitHub CLI, which carries its own jq,
+  # so gh formats the lines rather than this script parsing JSON.
+  $ghBin = Resolve-GhBinOrExit
+  $limit = Get-WorktrunkGhListLimit
+  if ($source -eq 'issues') {
+    $noun = 'issue'
+    $filter = Get-WorktrunkGhFilter 'issue_filter'
+    $ghArgs = @('issue', 'list', '--limit', "$limit", '--json', 'number,title',
+                '--jq', '.[] | "#\(.number)  \(.title)"')
+  } else {
+    $noun = 'pr'
+    $filter = Get-WorktrunkGhFilter 'pr_filter'
+    $ghArgs = @('pr', 'list', '--limit', "$limit", '--json', 'number,headRefName,title',
+                '--jq', '.[] | "#\(.number)  \(.headRefName)  \(.title)"')
+  }
+  switch ($filter) {
+    'assigned' { $ghArgs += @('--assignee', '@me') }
+    'created' { $ghArgs += @('--author', '@me') }
+  }
+
+  # Fetched up front instead of streamed into fzf: these lists are small, and a
+  # gh failure (not authenticated, no GitHub remote) has to be readable rather
+  # than showing up as an empty picker.
+  $ghOutput = & $ghBin @ghArgs 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-WtError "gh $($ghArgs[0]) list failed:"
+    foreach ($line in @($ghOutput)) { [Console]::Error.WriteLine([string]$line) }
+    [Console]::Out.Write("`npress any key to close")
+    Wait-WtAnyKey
+    exit 1
+  }
+  $ghLines = @(@($ghOutput) | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
+  $fzfPrompt = "$noun $WtChevron "
+  $header = "$WtEnterKey $WtArrow open or create the worktree for that $noun $WtDot type a number + $WtEnterKey $WtArrow use it directly $WtDot esc $WtArrow cancel"
+  $readPrompt = "$noun number"
+  $candidates = { $ghLines }
+}
+
+# A link handler hands the picker the number it parsed out of the clicked URL,
+# so Ctrl+clicking an issue/PR link skips the list entirely.
+$prefill = ''
+if ($source -ne 'branches' -and $env:WT_PICKER_PREFILL) { $prefill = [string]$env:WT_PICKER_PREFILL }
+
+# fzf over the candidates; --print-query returns a typed-but-unmatched entry so
+# we can create it, and alt-enter (print-query) forces the typed name even when
+# it fuzzy-matches an existing one (fzf then prints only the query, so the
+# last-line parse below lands on it). Falls back to a plain read if fzf isn't on PATH.
+if ($prefill) {
+  $name = $prefill
+} elseif (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
+  # Ordinal comparer: branch names are case-sensitive, and a PowerShell
+  # hashtable would fold 'Feature' into 'feature'.
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+  $choice = & $candidates |
     ForEach-Object { if ($seen.Add($_)) { $_ } } |
     fzf --print-query --reverse --info=inline @layout `
         --bind=alt-enter:print-query `
-        --prompt="worktree $WtChevron " `
+        --prompt="$fzfPrompt" `
         --header="$header"
   $fzfExit = $LASTEXITCODE
   if ($fzfExit -gt 1) { exit 0 }    # 130 = esc/abort -> cancel (0 = picked, 1 = typed-new)
@@ -90,9 +146,37 @@ if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
   $name = ''                        # last line: the selection if any, else the typed query
   if ($lines.Count -gt 0 -and $null -ne $lines[-1]) { $name = [string]$lines[-1] }
 } else {
-  $name = Read-Host "Branch (existing $WtArrow switch $WtDot new $WtArrow create from $createBaseLabel)"
+  $name = Read-Host $readPrompt
 }
 if (-not $name) { exit 0 }
+
+# Map a picked issue/PR onto something `wt switch` understands. A PR has a native
+# worktrunk shortcut - pr:N, which also handles fork PRs and sets pushRemote. An
+# issue has none, so it resolves to the branch that already exists for it, or to
+# a new name built from the configured template: that is what makes the action
+# "open OR create", and it keeps the issue number in the branch so worktrunk
+# hooks keyed on `issue-N` still fire. Anything that isn't a number (a typed
+# pr:16, ^, or a branch name) falls through to the branch handling untouched.
+if ($source -ne 'branches' -and $name -match '^\s*#?([0-9]+)(\s+(.*))?$') {
+  $number = $Matches[1]
+  $title = ''
+  if ($Matches.ContainsKey(3)) { $title = [string]$Matches[3] }
+  if ($source -eq 'prs') {
+    $name = "pr:$number"
+  } else {
+    $existing = Find-WtIssueBranch $number
+    if ($existing) {
+      $name = $existing
+    } else {
+      if (-not $title) {
+        # Typed or prefilled rather than picked, so no list line carried a title.
+        $viewed = & $ghBin issue view $number --json title --jq '.title' 2>$null
+        if ($LASTEXITCODE -eq 0) { $title = [string]@($viewed)[0] }
+      }
+      $name = New-WtIssueBranchName (Get-WorktrunkIssueBranchTemplate) $number (ConvertTo-WtSlug $title)
+    }
+  }
+}
 
 $openMode = Get-WorktrunkOpenMode
 

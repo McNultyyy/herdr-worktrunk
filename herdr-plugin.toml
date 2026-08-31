@@ -57,6 +57,37 @@ contexts = ["workspace"]
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/open.ps1\" picker-with-remotes-windows"]
 
+# GitHub issue/PR actions. These need the GitHub CLI (`gh auth login`); the rest
+# of the plugin does not, so they fail with an actionable message rather than
+# being hidden when gh is missing.
+[[actions]]
+id = "from-issue"
+title = "Worktree: open / create from a GitHub issue"
+contexts = ["workspace"]
+platforms = ["macos", "linux"]
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/open.sh\" issue-picker"]
+
+[[actions]]
+id = "from-issue-windows"
+title = "Worktree: open / create from a GitHub issue"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/open.ps1\" issue-picker-windows"]
+
+[[actions]]
+id = "from-pr"
+title = "Worktree: open / create from a pull request"
+contexts = ["workspace"]
+platforms = ["macos", "linux"]
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/open.sh\" pr-picker"]
+
+[[actions]]
+id = "from-pr-windows"
+title = "Worktree: open / create from a pull request"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/open.ps1\" pr-picker-windows"]
+
 [[actions]]
 id = "remove"
 title = "Worktree: remove"
@@ -145,6 +176,34 @@ platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/picker.ps1\" --show-with-remotes"]
 
 [[panes]]
+id = "issue-picker"
+title = "Worktrunk — GitHub issue"
+placement = "split"
+platforms = ["macos", "linux"]
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/picker.sh\" --source=issues"]
+
+[[panes]]
+id = "issue-picker-windows"
+title = "Worktrunk — GitHub issue"
+placement = "split"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/picker.ps1\" --source=issues"]
+
+[[panes]]
+id = "pr-picker"
+title = "Worktrunk — pull request"
+placement = "split"
+platforms = ["macos", "linux"]
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/picker.sh\" --source=prs"]
+
+[[panes]]
+id = "pr-picker-windows"
+title = "Worktrunk — pull request"
+placement = "split"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/picker.ps1\" --source=prs"]
+
+[[panes]]
 id = "remover"
 title = "Worktrunk — remove"
 placement = "split"
@@ -185,3 +244,35 @@ title = "Worktrunk — merge (no squash)"
 placement = "split"
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& \"$env:HERDR_PLUGIN_ROOT/merge.ps1\" --no-squash"]
+
+# Ctrl+click a GitHub issue or PR URL in any pane to open its worktree directly.
+# open.sh / open.ps1 lifts the number out of the clicked URL and hands it to the
+# picker, which then skips its list. Declared per platform because a handler
+# names one action, and the Windows actions are separate ids.
+[[link_handlers]]
+id = "issue-url"
+title = "Worktree from this issue"
+pattern = '^https://github\.com/[^/]+/[^/]+/issues/[0-9]+'
+action = "from-issue"
+platforms = ["macos", "linux"]
+
+[[link_handlers]]
+id = "issue-url-windows"
+title = "Worktree from this issue"
+pattern = '^https://github\.com/[^/]+/[^/]+/issues/[0-9]+'
+action = "from-issue-windows"
+platforms = ["windows"]
+
+[[link_handlers]]
+id = "pr-url"
+title = "Worktree from this pull request"
+pattern = '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+'
+action = "from-pr"
+platforms = ["macos", "linux"]
+
+[[link_handlers]]
+id = "pr-url-windows"
+title = "Worktree from this pull request"
+pattern = '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+'
+action = "from-pr-windows"
+platforms = ["windows"]

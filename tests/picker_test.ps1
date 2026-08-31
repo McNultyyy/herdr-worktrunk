@@ -52,6 +52,29 @@ try {
     'exit /b 0'
   )
 
+  # gh stub: the two list commands feed the issue/PR pickers, and `issue view`
+  # answers the title lookup for an issue number typed rather than picked.
+  $issuesFile = Join-Path $stubDir 'gh-issues.txt'
+  Set-Content -LiteralPath $issuesFile -Value @('#42  Fix the thing', '#9  Old work')
+  $prsFile = Join-Path $stubDir 'gh-prs.txt'
+  Set-Content -LiteralPath $prsFile -Value @('#16  feat/eager-worktree-focus  Eager worktree focus')
+  Set-Content -LiteralPath (Join-Path $stubDir 'gh.cmd') -Value @(
+    '@echo off',
+    'if "%~1 %~2"=="issue list" (',
+    'type "%GH_STUB_ISSUES%"',
+    'exit /b 0',
+    ')',
+    'if "%~1 %~2"=="pr list" (',
+    'type "%GH_STUB_PRS%"',
+    'exit /b 0',
+    ')',
+    'if "%~1 %~2"=="issue view" (',
+    'echo %GH_STUB_TITLE%',
+    'exit /b 0',
+    ')',
+    'exit /b 1'
+  )
+
   # herdr stub: `worktree list` locates the repo root, `worktree open` is the result.
   $worktreeJson = Join-Path $stubDir 'worktrees.json'
   @{ result = @{ source = @{ repo_root = $repo; repo_name = 'repo'; source_workspace_id = 'w1' } } } |
@@ -76,6 +99,10 @@ try {
   $env:HERDR_BIN_PATH = Join-Path $stubDir 'herdr.cmd'
   $env:HERDR_PLUGIN_CONFIG_DIR = $configDir
   $env:HERDR_WORKSPACE_ID = 'w1'
+  $env:GH_BIN = Join-Path $stubDir 'gh.cmd'
+  $env:GH_STUB_ISSUES = $issuesFile
+  $env:GH_STUB_PRS = $prsFile
+  $env:GH_STUB_TITLE = 'Add a widget'
   $outFile = Join-Path $stubDir 'fzf-out.txt'
   $env:FZF_STUB_OUT_FILE = $outFile
 
@@ -139,11 +166,65 @@ try {
   # every checkout.
   $stdin = @(Get-Content -LiteralPath (Join-Path $stubDir 'fzf.stdin') -ErrorAction SilentlyContinue) -join "`n"
   Assert-Eq "main`nsilas/foo-bar`npr-42`nPR-42" $stdin 'candidate list'
+
+  # --- issue and PR sources -------------------------------------------------
+  # (after the branch-source assertions: the extra branch below would otherwise
+  # show up in the branch picker's candidate list)
+
+  # An issue with no branch yet is created under the configured template, with
+  # the number kept in the name so worktrunk hooks keyed on `issue-N` still fire.
+  Invoke-Picker @('#42  Fix the thing') '0' @('--source=issues')
+  Assert-Eq 'switch --create feature/issue-42-fix-the-thing --no-cd --format=json' (Get-WtArgs) 'wt argv'
+
+  # gh's lines are what the picker offers, verbatim.
+  $stdin = @(Get-Content -LiteralPath (Join-Path $stubDir 'fzf.stdin') -ErrorAction SilentlyContinue) -join "`n"
+  Assert-Eq "#42  Fix the thing`n#9  Old work" $stdin 'issue candidate list'
+
+  # An issue that already has a branch is switched to, never created again.
+  git -C $repo branch feature/issue-9-old
+  Invoke-Picker @('#9  Old work') '0' @('--source=issues')
+  Assert-Eq 'switch feature/issue-9-old --no-cd --format=json' (Get-WtArgs) 'wt argv'
+
+  # A number typed rather than picked (fzf exits 1) carries no title, so the
+  # slug comes from `gh issue view`.
+  Invoke-Picker @('77') '1' @('--source=issues')
+  Assert-Eq 'switch --create feature/issue-77-add-a-widget --no-cd --format=json' (Get-WtArgs) 'wt argv'
+
+  # A configured template is honored, including one that leaves no slug.
+  Set-Content -LiteralPath (Join-Path $configDir 'config.toml') -Value 'issue_branch_template = "wt/{{number}}"'
+  Invoke-Picker @('#42  Fix the thing') '0' @('--source=issues')
+  Assert-Eq 'switch --create wt/42 --no-cd --format=json' (Get-WtArgs) 'wt argv'
+  Remove-Item -LiteralPath (Join-Path $configDir 'config.toml') -ErrorAction SilentlyContinue
+
+  # A PR goes through worktrunk's own pr:N shortcut, which handles fork PRs and
+  # pushRemote - so it is passed as-is, never with --create.
+  Invoke-Picker @('#16  feat/eager-worktree-focus  Eager worktree focus') '0' @('--source=prs')
+  Assert-Eq 'switch pr:16 --no-cd --format=json' (Get-WtArgs) 'wt argv'
+
+  # A link handler prefills the number, so the picker skips fzf entirely - the
+  # scripted fzf abort below would cancel the run if it were consulted.
+  $env:WT_PICKER_PREFILL = '16'
+  try {
+    Invoke-Picker @() '130' @('--source=prs')
+    Assert-Eq 'switch pr:16 --no-cd --format=json' (Get-WtArgs) 'wt argv'
+  } finally {
+    Remove-Item Env:\WT_PICKER_PREFILL -ErrorAction SilentlyContinue
+  }
+
+  # The prefill only applies to the gh sources; the branch picker still asks.
+  $env:WT_PICKER_PREFILL = '16'
+  try {
+    Invoke-Picker @() '130'
+    Assert-Eq '' (Get-WtArgs) 'wt argv'
+  } finally {
+    Remove-Item Env:\WT_PICKER_PREFILL -ErrorAction SilentlyContinue
+  }
 } finally {
   $env:Path = $origPath
   foreach ($name in 'STUB_DIR', 'WT_STUB_LIST_FILE', 'WT_STUB_SWITCH_JSON', 'HERDR_WORKTREE_JSON',
                     'WORKTRUNK_BIN', 'HERDR_PLUGIN_ROOT', 'HERDR_BIN_PATH', 'HERDR_PLUGIN_CONFIG_DIR',
-                    'HERDR_WORKSPACE_ID', 'FZF_STUB_OUT_FILE', 'FZF_STUB_EXIT') {
+                    'HERDR_WORKSPACE_ID', 'FZF_STUB_OUT_FILE', 'FZF_STUB_EXIT',
+                    'GH_BIN', 'GH_STUB_ISSUES', 'GH_STUB_PRS', 'GH_STUB_TITLE', 'WT_PICKER_PREFILL') {
     Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
   }
   Remove-Item -Recurse -Force -LiteralPath $stubDir, $workDir -ErrorAction SilentlyContinue

@@ -22,10 +22,17 @@ elseif ($pluginRoot.StartsWith('\\?\')) { $pluginRoot = $pluginRoot.Substring(4)
 . "$pluginRoot\config.ps1"
 
 $cwd = $null
+# A link handler invokes the action with the clicked URL in the same context, so
+# the issue/PR number is lifted out of it here and handed to the picker, which
+# then skips its list entirely. Absent for a menu or keybinding invocation.
+$prefill = ''
 try {
   $context = ConvertFrom-Json -InputObject $env:HERDR_PLUGIN_CONTEXT_JSON
   if ($context.workspace_cwd) { $cwd = $context.workspace_cwd }
   elseif ($context.focused_pane_cwd) { $cwd = $context.focused_pane_cwd }
+  if ([string]$context.clicked_url -match '/(issues|pull|merge_requests)/([0-9]+)') {
+    $prefill = $Matches[2]
+  }
 } catch {}
 if (-not $cwd) {
   Write-WtError 'no workspace cwd in HERDR_PLUGIN_CONTEXT_JSON'
@@ -61,6 +68,8 @@ if ((Get-WorktrunkPickerPlacement) -eq 'popup') {
 } else {
   $herdrArgs += @('--placement', 'split', '--direction', 'down')
 }
+
+if ($prefill) { $herdrArgs += @('--env', "WT_PICKER_PREFILL=$prefill") }
 
 & $herdr @herdrArgs
 exit $LASTEXITCODE

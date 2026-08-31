@@ -134,3 +134,68 @@ function Resolve-WorktrunkBinOrExit {
   Start-Sleep -Seconds 2
   exit 1
 }
+
+# The GitHub CLI to run for the issue/PR pickers. Resolution mirrors
+# Get-WorktrunkBin: GH_BIN environment variable (also how the tests stub it),
+# then gh_bin in the plugin config.toml, then `gh` on PATH. Returns '' when
+# nothing is found; callers print the actionable error.
+function Get-GhBin {
+  if ($env:GH_BIN) { return $env:GH_BIN }
+
+  $configured = Get-WorktrunkConfigValue 'gh_bin'
+  if ($configured) { return $configured }
+
+  $cmd = Get-Command 'gh' -CommandType Application -ErrorAction SilentlyContinue
+  if ($cmd) { return @($cmd)[0].Source }
+
+  return ''
+}
+
+# Resolve the GitHub CLI or fail the pane with an actionable message.
+function Resolve-GhBinOrExit {
+  $bin = Get-GhBin
+  if ($bin) { return $bin }
+  Write-WtError 'GitHub CLI not found. Install it (https://cli.github.com), run `gh auth login`, and either put it on PATH as `gh` or set gh_bin in the plugin config.toml / the GH_BIN environment variable.'
+  Start-Sleep -Seconds 2
+  exit 1
+}
+
+# A branch-safe slug from an issue title: lowercase, every run of non-alphanumeric
+# characters folded to a single dash, trimmed. Truncated to MaxLength on a dash
+# boundary so the branch name stays readable and never ends in a separator.
+function ConvertTo-WtSlug([string]$Title, [int]$MaxLength = 36) {
+  if (-not $Title) { return '' }
+  $slug = $Title.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+  $slug = $slug.Trim('-')
+  if ($MaxLength -gt 0 -and $slug.Length -gt $MaxLength) {
+    $slug = $slug.Substring(0, $MaxLength).Trim('-')
+  }
+  return $slug
+}
+
+# Fill TEMPLATE's {{number}}/{{slug}} placeholders. An issue with a title that
+# slugs to nothing (emoji only, say) would otherwise leave a dangling separator,
+# so trailing dashes and slashes are trimmed off the result.
+function New-WtIssueBranchName([string]$Template, [string]$Number, [string]$Slug) {
+  $name = $Template -replace '\{\{\s*number\s*\}\}', $Number
+  $name = $name -replace '\{\{\s*slug\s*\}\}', $Slug
+  return ($name -replace '[-/]+$', '')
+}
+
+# The existing local or remote-tracking branch for issue NUMBER, or '' when there
+# is none. This is what makes the issue action "open OR create": a second run for
+# the same issue switches to the branch you already have instead of creating a
+# near-duplicate under the current template. Matches `issue-N` (also issue_N,
+# issueN) as a whole token, so issue-4 never matches issue-42. Local branches
+# win over remote-tracking ones; both are checked out directly by `wt switch`.
+function Find-WtIssueBranch([string]$Number) {
+  if ($Number -notmatch '^[0-9]+$') { return '' }
+  $pattern = '(^|[^0-9a-z])issue[-_]?' + $Number + '($|[^0-9])'
+  foreach ($refs in @('refs/heads', 'refs/remotes')) {
+    foreach ($branch in (git for-each-ref --format='%(refname:short)' $refs 2>$null)) {
+      if (-not $branch -or $branch -match '/HEAD$') { continue }
+      if ($branch.ToLowerInvariant() -match $pattern) { return $branch }
+    }
+  }
+  return ''
+}

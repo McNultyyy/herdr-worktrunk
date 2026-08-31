@@ -104,6 +104,34 @@ try {
   Set-Content -LiteralPath $configFile -Value "worktrunk_bin = ''"
   Assert-Eq '' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
 
+  # GitHub issue/PR picker settings.
+  Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'   # unrelated key -> defaults
+  Assert-Eq 'feature/issue-{{number}}-{{slug}}' (Get-WorktrunkIssueBranchTemplate) 'issue_branch_template'
+  Assert-Eq '50' (Get-WorktrunkGhListLimit) 'gh_list_limit'
+  Assert-Eq 'all' (Get-WorktrunkGhFilter 'issue_filter') 'issue_filter'
+
+  Set-Content -LiteralPath $configFile -Value 'issue_branch_template = "wt/{{ number }}-{{ slug }}"'
+  Assert-Eq 'wt/{{ number }}-{{ slug }}' (Get-WorktrunkIssueBranchTemplate) 'issue_branch_template'
+
+  # A template without {{number}} would collapse every issue onto one branch.
+  Set-Content -LiteralPath $configFile -Value 'issue_branch_template = "feature/{{slug}}"'
+  Assert-Eq 'feature/issue-{{number}}-{{slug}}' (Get-WorktrunkIssueBranchTemplate) 'issue_branch_template'
+
+  Set-Content -LiteralPath $configFile -Value 'gh_list_limit = 200'
+  Assert-Eq '200' (Get-WorktrunkGhListLimit) 'gh_list_limit'
+  Set-Content -LiteralPath $configFile -Value 'gh_list_limit = 0'          # unsupported -> default
+  Assert-Eq '50' (Get-WorktrunkGhListLimit) 'gh_list_limit'
+  Set-Content -LiteralPath $configFile -Value 'gh_list_limit = "lots"'     # unsupported -> default
+  Assert-Eq '50' (Get-WorktrunkGhListLimit) 'gh_list_limit'
+
+  Set-Content -LiteralPath $configFile -Value 'pr_filter = "assigned"'
+  Assert-Eq 'assigned' (Get-WorktrunkGhFilter 'pr_filter') 'pr_filter'
+  Assert-Eq 'all' (Get-WorktrunkGhFilter 'issue_filter') 'issue_filter'    # keys are independent
+  Set-Content -LiteralPath $configFile -Value 'issue_filter = created'     # bare TOML also ok
+  Assert-Eq 'created' (Get-WorktrunkGhFilter 'issue_filter') 'issue_filter'
+  Set-Content -LiteralPath $configFile -Value 'issue_filter = "mine"'      # unsupported -> default
+  Assert-Eq 'all' (Get-WorktrunkGhFilter 'issue_filter') 'issue_filter'
+
   # herdr may hand the config dir over in extended-length form (\\?\C:\...),
   # like it does the plugin root; values must still be found.
   Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'

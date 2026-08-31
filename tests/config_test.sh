@@ -139,4 +139,40 @@ assert_merge_flags "--no-squash"
 printf 'merge_flags = "--no-remove --format=json -C /tmp --yes"\n' > "$config_dir/config.toml"
 assert_merge_flags ""
 
+# GitHub issue/PR picker settings.
+assert_config() {
+  local expected=$1 actual=$2 what=$3
+  if [[ $actual != "$expected" ]]; then
+    printf 'expected %s %q, got %q\n' "$what" "$expected" "$actual" >&2
+    exit 1
+  fi
+}
+
+printf 'open_mode = "tab"\n' > "$config_dir/config.toml"   # unrelated key -> defaults
+assert_config 'feature/issue-{{number}}-{{slug}}' "$(worktrunk_issue_branch_template 2>/dev/null)" 'issue_branch_template'
+assert_config 50 "$(worktrunk_gh_list_limit 2>/dev/null)" 'gh_list_limit'
+assert_config all "$(worktrunk_gh_filter issue_filter 2>/dev/null)" 'issue_filter'
+
+printf 'issue_branch_template = "wt/{{ number }}-{{ slug }}"\n' > "$config_dir/config.toml"
+assert_config 'wt/{{ number }}-{{ slug }}' "$(worktrunk_issue_branch_template 2>/dev/null)" 'issue_branch_template'
+
+# A template without {{number}} would collapse every issue onto one branch.
+printf 'issue_branch_template = "feature/{{slug}}"\n' > "$config_dir/config.toml"
+assert_config 'feature/issue-{{number}}-{{slug}}' "$(worktrunk_issue_branch_template 2>/dev/null)" 'issue_branch_template'
+
+printf 'gh_list_limit = 200\n' > "$config_dir/config.toml"
+assert_config 200 "$(worktrunk_gh_list_limit 2>/dev/null)" 'gh_list_limit'
+printf 'gh_list_limit = 0\n' > "$config_dir/config.toml"          # unsupported -> default
+assert_config 50 "$(worktrunk_gh_list_limit 2>/dev/null)" 'gh_list_limit'
+printf 'gh_list_limit = "lots"\n' > "$config_dir/config.toml"     # unsupported -> default
+assert_config 50 "$(worktrunk_gh_list_limit 2>/dev/null)" 'gh_list_limit'
+
+printf 'pr_filter = "assigned"\n' > "$config_dir/config.toml"
+assert_config assigned "$(worktrunk_gh_filter pr_filter 2>/dev/null)" 'pr_filter'
+assert_config all "$(worktrunk_gh_filter issue_filter 2>/dev/null)" 'issue_filter'   # keys are independent
+printf 'issue_filter = created\n' > "$config_dir/config.toml"     # bare TOML also ok
+assert_config created "$(worktrunk_gh_filter issue_filter 2>/dev/null)" 'issue_filter'
+printf 'issue_filter = "mine"\n' > "$config_dir/config.toml"      # unsupported -> default
+assert_config all "$(worktrunk_gh_filter issue_filter 2>/dev/null)" 'issue_filter'
+
 printf 'config tests passed\n'
