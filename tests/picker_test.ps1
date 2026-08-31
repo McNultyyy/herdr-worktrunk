@@ -53,13 +53,19 @@ try {
   )
 
   # gh stub: the two list commands feed the issue/PR pickers, and `issue view`
-  # answers the title lookup for an issue number typed rather than picked.
-  $issuesFile = Join-Path $stubDir 'gh-issues.txt'
-  Set-Content -LiteralPath $issuesFile -Value @('#42  Fix the thing', '#9  Old work')
-  $prsFile = Join-Path $stubDir 'gh-prs.txt'
-  Set-Content -LiteralPath $prsFile -Value @('#16  feat/eager-worktree-focus  Eager worktree focus')
+  # answers the title lookup for an issue number typed rather than picked. It
+  # answers in JSON, like the real gh, and records its argv one argument per
+  # line — the picker must never hand gh a `--jq` program, because Windows
+  # PowerShell garbles a native argument that has both spaces and quotes.
+  $issuesFile = Join-Path $stubDir 'gh-issues.json'
+  Set-Content -LiteralPath $issuesFile -Value '[{"number":42,"title":"Fix the thing"},{"number":9,"title":"Old work"}]'
+  $prsFile = Join-Path $stubDir 'gh-prs.json'
+  Set-Content -LiteralPath $prsFile -Value '[{"number":16,"headRefName":"feat/eager-worktree-focus","title":"Eager worktree focus"}]'
+  $titleFile = Join-Path $stubDir 'gh-title.json'
+  Set-Content -LiteralPath $titleFile -Value '{"title":"Add a widget"}'
   Set-Content -LiteralPath (Join-Path $stubDir 'gh.cmd') -Value @(
     '@echo off',
+    '> "%STUB_DIR%\gh.args" echo %*',
     'if "%~1 %~2"=="issue list" (',
     'type "%GH_STUB_ISSUES%"',
     'exit /b 0',
@@ -69,7 +75,7 @@ try {
     'exit /b 0',
     ')',
     'if "%~1 %~2"=="issue view" (',
-    'echo %GH_STUB_TITLE%',
+    'type "%GH_STUB_TITLE_JSON%"',
     'exit /b 0',
     ')',
     'exit /b 1'
@@ -102,7 +108,7 @@ try {
   $env:GH_BIN = Join-Path $stubDir 'gh.cmd'
   $env:GH_STUB_ISSUES = $issuesFile
   $env:GH_STUB_PRS = $prsFile
-  $env:GH_STUB_TITLE = 'Add a widget'
+  $env:GH_STUB_TITLE_JSON = $titleFile
   $outFile = Join-Path $stubDir 'fzf-out.txt'
   $env:FZF_STUB_OUT_FILE = $outFile
 
@@ -116,6 +122,11 @@ try {
     # a key can never block the test run.
     try { $null = @() | & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'picker.ps1') @extra 2>&1 }
     finally { Pop-Location }
+  }
+
+  function Get-GhArgs {
+    $line = Get-Content -LiteralPath (Join-Path $stubDir 'gh.args') -ErrorAction SilentlyContinue
+    return [string]@($line)[0]
   }
 
   function Get-WtArgs {
@@ -176,7 +187,10 @@ try {
   Invoke-Picker @('#42  Fix the thing') '0' @('--source=issues')
   Assert-Eq 'switch --create feature/issue-42-fix-the-thing --no-cd --format=json' (Get-WtArgs) 'wt argv'
 
-  # gh's lines are what the picker offers, verbatim.
+  # gh answers in JSON and the picker formats the lines itself. No --jq: Windows
+  # PowerShell garbles a native argument carrying both spaces and quotes, which
+  # is exactly what a jq program is, and gh rejects the fragments.
+  Assert-Eq 'issue list --limit 50 --json number,title' (Get-GhArgs) 'gh argv'
   $stdin = @(Get-Content -LiteralPath (Join-Path $stubDir 'fzf.stdin') -ErrorAction SilentlyContinue) -join "`n"
   Assert-Eq "#42  Fix the thing`n#9  Old work" $stdin 'issue candidate list'
 
@@ -189,6 +203,7 @@ try {
   # slug comes from `gh issue view`.
   Invoke-Picker @('77') '1' @('--source=issues')
   Assert-Eq 'switch --create feature/issue-77-add-a-widget --no-cd --format=json' (Get-WtArgs) 'wt argv'
+  Assert-Eq 'issue view 77 --json title' (Get-GhArgs) 'gh argv'
 
   # A configured template is honored, including one that leaves no slug.
   Set-Content -LiteralPath (Join-Path $configDir 'config.toml') -Value 'issue_branch_template = "wt/{{number}}"'
@@ -200,6 +215,15 @@ try {
   # pushRemote - so it is passed as-is, never with --create.
   Invoke-Picker @('#16  feat/eager-worktree-focus  Eager worktree focus') '0' @('--source=prs')
   Assert-Eq 'switch pr:16 --no-cd --format=json' (Get-WtArgs) 'wt argv'
+  Assert-Eq 'pr list --limit 50 --json number,headRefName,title' (Get-GhArgs) 'gh argv'
+  $stdin = @(Get-Content -LiteralPath (Join-Path $stubDir 'fzf.stdin') -ErrorAction SilentlyContinue) -join "`n"
+  Assert-Eq '#16  feat/eager-worktree-focus  Eager worktree focus' $stdin 'pr candidate list'
+
+  # The configured filter reaches gh as its own flag pair.
+  Set-Content -LiteralPath (Join-Path $configDir 'config.toml') -Value @('issue_filter = "assigned"', 'gh_list_limit = 7')
+  Invoke-Picker @('#42  Fix the thing') '0' @('--source=issues')
+  Assert-Eq 'issue list --limit 7 --json number,title --assignee @me' (Get-GhArgs) 'gh argv'
+  Remove-Item -LiteralPath (Join-Path $configDir 'config.toml') -ErrorAction SilentlyContinue
 
   # A link handler prefills the number, so the picker skips fzf entirely - the
   # scripted fzf abort below would cancel the run if it were consulted.
@@ -224,7 +248,7 @@ try {
   foreach ($name in 'STUB_DIR', 'WT_STUB_LIST_FILE', 'WT_STUB_SWITCH_JSON', 'HERDR_WORKTREE_JSON',
                     'WORKTRUNK_BIN', 'HERDR_PLUGIN_ROOT', 'HERDR_BIN_PATH', 'HERDR_PLUGIN_CONFIG_DIR',
                     'HERDR_WORKSPACE_ID', 'FZF_STUB_OUT_FILE', 'FZF_STUB_EXIT',
-                    'GH_BIN', 'GH_STUB_ISSUES', 'GH_STUB_PRS', 'GH_STUB_TITLE', 'WT_PICKER_PREFILL') {
+                    'GH_BIN', 'GH_STUB_ISSUES', 'GH_STUB_PRS', 'GH_STUB_TITLE_JSON', 'WT_PICKER_PREFILL') {
     Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
   }
   Remove-Item -Recurse -Force -LiteralPath $stubDir, $workDir -ErrorAction SilentlyContinue

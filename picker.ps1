@@ -81,20 +81,21 @@ if ($source -eq 'branches') {
       }
     }
 } else {
-  # Issues and pull requests come from the GitHub CLI, which carries its own jq,
-  # so gh formats the lines rather than this script parsing JSON.
+  # Issues and pull requests come from the GitHub CLI. Unlike the bash side this
+  # never passes gh a `--jq` program: Windows PowerShell garbles a native
+  # argument carrying both spaces and quotes, and gh took the tail of the jq
+  # expression for an argument of its own. The JSON is formatted below instead,
+  # the way the rest of the Windows port reads worktrunk's and herdr's output.
   $ghBin = Resolve-GhBinOrExit
   $limit = Get-WorktrunkGhListLimit
   if ($source -eq 'issues') {
     $noun = 'issue'
     $filter = Get-WorktrunkGhFilter 'issue_filter'
-    $ghArgs = @('issue', 'list', '--limit', "$limit", '--json', 'number,title',
-                '--jq', '.[] | "#\(.number)  \(.title)"')
+    $ghArgs = @('issue', 'list', '--limit', "$limit", '--json', 'number,title')
   } else {
     $noun = 'pr'
     $filter = Get-WorktrunkGhFilter 'pr_filter'
-    $ghArgs = @('pr', 'list', '--limit', "$limit", '--json', 'number,headRefName,title',
-                '--jq', '.[] | "#\(.number)  \(.headRefName)  \(.title)"')
+    $ghArgs = @('pr', 'list', '--limit', "$limit", '--json', 'number,headRefName,title')
   }
   switch ($filter) {
     'assigned' { $ghArgs += @('--assignee', '@me') }
@@ -112,7 +113,30 @@ if ($source -eq 'branches') {
     Wait-WtAnyKey
     exit 1
   }
-  $ghLines = @(@($ghOutput) | ForEach-Object { [string]$_ } | Where-Object { $_ -ne '' })
+  # 2>&1 above turns gh's stderr into ErrorRecords; only the stdout strings are
+  # the JSON document.
+  $ghJson = [string]::Join("`n", @(@($ghOutput) | Where-Object { $_ -is [string] }))
+  $ghItems = $null
+  if ($ghJson.Trim()) {
+    try {
+      $ghItems = ConvertFrom-Json -InputObject $ghJson
+    } catch {
+      Write-WtError "could not read the $noun list from gh: $($_.Exception.Message)"
+      [Console]::Out.Write("`npress any key to close")
+      Wait-WtAnyKey
+      exit 1
+    }
+  }
+  # Piped rather than wrapped in @(): ConvertFrom-Json hands the whole JSON array
+  # over as one object, so @() would nest it and every field would come back as
+  # the joined values of every item.
+  $ghLines = @()
+  if ($null -ne $ghItems) {
+    $ghLines = @($ghItems | ForEach-Object {
+      if ($source -eq 'issues') { "#$($_.number)  $($_.title)" }
+      else { "#$($_.number)  $($_.headRefName)  $($_.title)" }
+    })
+  }
   $fzfPrompt = "$noun $WtChevron "
   $header = "$WtEnterKey $WtArrow open or create the worktree for that $noun $WtDot type a number + $WtEnterKey $WtArrow use it directly $WtDot esc $WtArrow cancel"
   $readPrompt = "$noun number"
@@ -170,8 +194,12 @@ if ($source -ne 'branches' -and $name -match '^\s*#?([0-9]+)(\s+(.*))?$') {
     } else {
       if (-not $title) {
         # Typed or prefilled rather than picked, so no list line carried a title.
-        $viewed = & $ghBin issue view $number --json title --jq '.title' 2>$null
-        if ($LASTEXITCODE -eq 0) { $title = [string]@($viewed)[0] }
+        $viewed = & $ghBin issue view $number --json title 2>$null
+        if ($LASTEXITCODE -eq 0) {
+          try {
+            $title = [string](ConvertFrom-Json -InputObject ([string]::Join("`n", @($viewed)))).title
+          } catch {}
+        }
       }
       $name = New-WtIssueBranchName (Get-WorktrunkIssueBranchTemplate) $number (ConvertTo-WtSlug $title)
     }
