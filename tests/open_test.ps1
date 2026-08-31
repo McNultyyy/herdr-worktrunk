@@ -73,6 +73,28 @@ try {
   Assert-OpensWith '--placement popup' $opened
   Refute-OpensWith '--width' $opened      # malformed -> herdr's default popup size
 
+  # A link handler invokes the action with the clicked URL in the context; the
+  # issue/PR number is lifted out of it and handed to the picker, which then
+  # skips its list. Menu and keybinding invocations carry no URL, so no prefill.
+  Set-Content -LiteralPath $configFile -Value 'open_mode = "workspace"'
+  $env:HERDR_PLUGIN_CONTEXT_JSON = '{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/issues/42#issuecomment-1"}'
+  $opened = Get-OpenArgs 'issue-picker-windows'
+  Assert-OpensWith '--entrypoint issue-picker-windows' $opened
+  Assert-OpensWith '--env WT_PICKER_PREFILL=42' $opened
+
+  $env:HERDR_PLUGIN_CONTEXT_JSON = '{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/pull/16"}'
+  $opened = Get-OpenArgs 'pr-picker-windows'
+  Assert-OpensWith '--env WT_PICKER_PREFILL=16' $opened
+
+  # A URL that is neither an issue nor a PR leaves the picker to ask.
+  $env:HERDR_PLUGIN_CONTEXT_JSON = '{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/commit/abc123"}'
+  $opened = Get-OpenArgs 'issue-picker-windows'
+  Refute-OpensWith 'WT_PICKER_PREFILL' $opened
+
+  $env:HERDR_PLUGIN_CONTEXT_JSON = '{"workspace_cwd":"/tmp/repo","focused_pane_cwd":"/tmp/pane"}'
+  $opened = Get-OpenArgs 'issue-picker-windows'
+  Refute-OpensWith 'WT_PICKER_PREFILL' $opened
+
   # Actions invoked from a pane rather than a workspace carry no workspace_cwd.
   $env:HERDR_PLUGIN_CONTEXT_JSON = '{"workspace_cwd":null,"focused_pane_cwd":"/tmp/pane"}'
   $opened = Get-OpenArgs 'picker-default-windows'

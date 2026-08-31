@@ -81,6 +81,30 @@ args=$(open_args picker-default)
 assert_opens_with '--placement popup' "$args"
 refute_opens_with '--width' "$args"      # malformed → herdr's default popup size
 
+# A link handler invokes the action with the clicked URL in the context; the
+# issue/PR number is lifted out of it and handed to the picker, which then skips
+# its list. Menu and keybinding invocations carry no URL, so no prefill.
+printf 'open_mode = "workspace"
+' > "$config_dir/config.toml"
+context='{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/issues/42#issuecomment-1"}'
+args=$(open_args issue-picker)
+assert_opens_with '--entrypoint issue-picker' "$args"
+assert_opens_with '--env WT_PICKER_PREFILL=42' "$args"
+
+context='{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/pull/16"}'
+args=$(open_args pr-picker)
+assert_opens_with '--env WT_PICKER_PREFILL=16' "$args"
+
+# A URL that is neither an issue nor a PR leaves the picker to ask.
+context='{"workspace_cwd":"/tmp/repo","clicked_url":"https://github.com/o/r/commit/abc123"}'
+args=$(open_args issue-picker)
+refute_opens_with 'WT_PICKER_PREFILL' "$args"
+
+context='{"workspace_cwd":"/tmp/repo","focused_pane_cwd":"/tmp/pane"}'
+args=$(open_args issue-picker)
+refute_opens_with 'WT_PICKER_PREFILL' "$args"
+
+
 # Actions invoked from a pane rather than a workspace carry no workspace_cwd.
 context='{"workspace_cwd":null,"focused_pane_cwd":"/tmp/pane"}'
 args=$(open_args picker-default)
