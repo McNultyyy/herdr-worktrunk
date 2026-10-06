@@ -43,7 +43,9 @@ function Wait-WtAnyKey {
 # single-quoted TOML literals (worktrunk_bin = 'C:\path\to\wt.exe' - the
 # natural form for Windows paths, since literals need no backslash escaping),
 # and bare TOML scalars (show_remote_branches = false); the last occurrence
-# wins, like the sed | tail -n1 in config.sh.
+# wins, like the sed | tail -n1 in config.sh. Like config.sh, keys match
+# case-sensitively (as in TOML), and the file is read as UTF-8 rather than
+# Windows PowerShell's ANSI default; Get-Content drops a BOM if there is one.
 function Get-WorktrunkConfigValue([string]$Key) {
   $configDir = $env:HERDR_PLUGIN_CONFIG_DIR
   if (-not $configDir) { return '' }
@@ -56,8 +58,8 @@ function Get-WorktrunkConfigValue([string]$Key) {
 
   $value = ''
   $pattern = '^\s*' + [regex]::Escape($Key) + '\s*=\s*("([^"]*)"|''([^'']*)''|([^\s#"'']+))\s*(#.*)?$'
-  foreach ($line in (Get-Content -LiteralPath $configFile)) {
-    if ($line -match $pattern) {
+  foreach ($line in (Get-Content -LiteralPath $configFile -Encoding UTF8)) {
+    if ($line -cmatch $pattern) {
       if ($Matches.ContainsKey(2)) { $value = $Matches[2] }
       elseif ($Matches.ContainsKey(3)) { $value = $Matches[3] }
       else { $value = $Matches[4] }

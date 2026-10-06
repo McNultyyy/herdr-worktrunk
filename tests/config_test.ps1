@@ -92,17 +92,97 @@ try {
   Set-Content -LiteralPath $configFile -Value 'merge_flags = "--no-remove --format=json -C /tmp --yes"'
   Assert-Eq '' ((Get-WorktrunkMergeFlags) -join ' ') 'merge_flags'
 
-  # Single-quoted TOML literals are the natural form for Windows paths (no
-  # backslash escaping) - including ones with spaces - and must not keep their
-  # quotes. Double-quoted and bare values still work alongside.
-  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = 'C:\path\to\wt.exe'"
-  Assert-Eq 'C:\path\to\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
-  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = 'C:\Program Files\worktrunk\wt.exe' # literal"
-  Assert-Eq 'C:\Program Files\worktrunk\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
-  Set-Content -LiteralPath $configFile -Value 'worktrunk_bin = "C:\\tools\\wt.exe"'
-  Assert-Eq 'C:\\tools\\wt.exe' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
-  Set-Content -LiteralPath $configFile -Value "worktrunk_bin = ''"
-  Assert-Eq '' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
+  # One config.toml may be shared between Windows and macOS/Linux, so
+  # Get-WorktrunkConfigValue and config.sh's worktrunk_config_value must read it
+  # the same way: config_test.sh runs this same table. Set-Config writes the
+  # bytes the bash side does: UTF-8 without a BOM, LF line ends.
+  function Set-Config([string[]]$Lines, [string]$Eol = "`n", [string]$Prefix = '') {
+    $text = $Prefix + (($Lines | ForEach-Object { $_ + $Eol }) -join '')
+    [IO.File]::WriteAllText($configFile, $text, (New-Object System.Text.UTF8Encoding $false))
+  }
+  function Assert-Value([string]$Key, [string]$Expected) {
+    Assert-Eq $Expected (Get-WorktrunkConfigValue $Key) $Key
+  }
+
+  Set-Config 'open_mode = "tab"'
+  Assert-Value open_mode tab
+
+  # Single-quoted TOML literals, the natural form for Windows paths, lose their
+  # quotes and keep spaces and backslashes as written.
+  Set-Config "worktrunk_bin = 'C:\path\to\wt.exe'"
+  Assert-Value worktrunk_bin 'C:\path\to\wt.exe'
+
+  Set-Config "worktrunk_bin = 'C:\Program Files\worktrunk\wt.exe'"
+  Assert-Value worktrunk_bin 'C:\Program Files\worktrunk\wt.exe'
+
+  Set-Config "worktrunk_bin = 'C:\tools\wt.exe' # literal"
+  Assert-Value worktrunk_bin 'C:\tools\wt.exe'
+
+  Set-Config 'worktrunk_bin = "C:\\tools\\wt.exe"'   # escapes kept as written
+  Assert-Value worktrunk_bin 'C:\\tools\\wt.exe'
+
+  Set-Config 'open_mode = "tab" # note'
+  Assert-Value open_mode tab
+
+  Set-Config 'open_mode = "a # b" # note'   # a quoted # is no comment
+  Assert-Value open_mode 'a # b'
+
+  Set-Config "open_mode = 'a # b' # note"
+  Assert-Value open_mode 'a # b'
+
+  Set-Config "open_mode = 'say `"hi`"'"
+  Assert-Value open_mode 'say "hi"'
+
+  Set-Config "open_mode = ''"
+  Assert-Value open_mode ''
+
+  Set-Config 'open_mode = ""'
+  Assert-Value open_mode ''
+
+  Set-Config 'show_remote_branches = true # note'
+  Assert-Value show_remote_branches true
+
+  Set-Config " `topen_mode = tab"                 # leading whitespace
+  Assert-Value open_mode tab
+
+  Set-Config 'open_mode="tab"'
+  Assert-Value open_mode tab
+
+  Set-Config @('open_mode = "tab"', 'open_mode = "workspace"')   # last one wins
+  Assert-Value open_mode workspace
+
+  Set-Config '# open_mode = "tab"'           # commented out
+  Assert-Value open_mode ''
+
+  Set-Config @('open_mode = "workspace"', '# open_mode = "tab"')
+  Assert-Value open_mode workspace
+
+  # A key never matches a longer key that it is a prefix of, or another case.
+  Set-Config 'hold_on_success = true'
+  Assert-Value hold_on ''
+
+  Set-Config @('hold_on = "x"', 'hold_on_success = true')
+  Assert-Value hold_on x
+  Assert-Value hold_on_success true
+
+  Set-Config 'OPEN_MODE = "tab"'
+  Assert-Value open_mode ''
+
+  # Not TOML: a bare value can't hold a quote, so it reads as unset.
+  Set-Config "open_mode = it's"
+  Assert-Value open_mode ''
+
+  # What a Windows editor may write: a UTF-8 BOM, CRLF line ends, non-ASCII text.
+  Set-Config 'open_mode = "tab"' -Prefix ([string][char]0xFEFF)
+  Assert-Value open_mode tab
+
+  Set-Config @('open_mode = "tab"', 'show_remote_branches = true', "worktrunk_bin = 'C:\tools\wt.exe' # literal") -Eol "`r`n"
+  Assert-Value open_mode tab
+  Assert-Value show_remote_branches true
+  Assert-Value worktrunk_bin 'C:\tools\wt.exe'
+
+  Set-Config "worktrunk_bin = 'C:\Users\Zo$([char]0xEB)\wt.exe'"
+  Assert-Value worktrunk_bin "C:\Users\Zo$([char]0xEB)\wt.exe"
 
   Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'   # unrelated key -> default
   Assert-Eq 'false' (Get-WorktrunkSlugifyNewBranches) 'slugify_new_branches'
