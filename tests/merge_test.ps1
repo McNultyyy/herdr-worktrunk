@@ -2,6 +2,10 @@
 # checks. Runs merge.ps1 as a child process with wt/fzf/herdr stubbed as .cmd
 # shims; JSON payloads travel through files so cmd quoting can't mangle them.
 $ErrorActionPreference = 'Continue'
+# A test that throws must fail, not skip its remaining checks and report
+# success: with no catch, an error inside try { } finally { } leaves the try
+# and the script carries on to its "passed" line.
+trap { [Console]::Error.WriteLine("test aborted: $_"); exit 1 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
