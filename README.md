@@ -203,7 +203,7 @@ popup does not need, so the list fills the popup frame herdr already draws.
 ## Requirements
 
 - [**herdr**](https://herdr.dev) ≥ 0.7.0 (Windows support was tested with
-  0.8.2 and 0.9.2-preview)
+  0.9.2-preview)
 - [**worktrunk**](https://github.com/max-sixty/worktrunk) ≥ 0.60.0 — the `wt` CLI on your `PATH`
 - **fzf** — the interactive picker
 - **jq** — JSON parsing (macOS/Linux only; the Windows scripts parse JSON natively)
