@@ -53,6 +53,8 @@ try {
     'exit /b 0'
   )
 
+  # herdr also echoes its calls into the pane, so a message can be placed before
+  # or after them.
   Set-Content -LiteralPath $worktreeJson -Value "{`"result`":{`"worktrees`":[{`"path`":`"$fakeWtFwd`",`"open_workspace_id`":`"ws-feature`"}]}}"
   Set-Content -LiteralPath (Join-Path $stubDir 'herdr.cmd') -Value @(
     '@echo off',
@@ -61,6 +63,7 @@ try {
     'exit /b 0',
     ')',
     '>> "%HERDR_STUB_LOG%" echo %*',
+    'echo %*',
     'exit /b 0'
   )
 
@@ -77,15 +80,27 @@ try {
   $configFile = Join-Path $configDir 'config.toml'
 
   # Run merge.ps1 with the given argv and the config already in place; the wt
-  # and herdr logs then expose what each was asked to do.
+  # and herdr logs then expose what each was asked to do, and $paneOut what the
+  # pane showed, flattened to one line so a pattern can span the order things
+  # were shown in.
+  $script:paneOut = ''
   function Invoke-Merge {
     Set-Content -LiteralPath $env:WT_STUB_LOG -Value $null
     Set-Content -LiteralPath $env:HERDR_STUB_LOG -Value $null
     if (-not (Test-Path -LiteralPath $pickFile)) { Set-Content -LiteralPath $pickFile -Value 'feature' }
     # Empty pipeline input closes the child's stdin (the bash test's </dev/null):
     # the failure paths print "press any key" and read a line, which must not block.
-    $null = @() | & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'merge.ps1') @args 2>&1
-    return $LASTEXITCODE
+    $out = @() | & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot 'merge.ps1') @args 2>&1
+    $code = $LASTEXITCODE
+    $script:paneOut = (@($out) -join ' ') -replace '\s+', ' '
+    return $code
+  }
+
+  function Assert-Pane([string]$Pattern) {
+    if ($script:paneOut -cnotmatch $Pattern) { Fail "expected pane output matching '$Pattern', got:`n$script:paneOut" }
+  }
+  function Refute-Pane([string]$Pattern) {
+    if ($script:paneOut -cmatch $Pattern) { Fail "unexpected pane output matching '$Pattern' in:`n$script:paneOut" }
   }
 
   function Get-LogLines([string]$Log) {
@@ -116,9 +131,10 @@ try {
   $env:WT_STUB_REMOVE_STATUS = '0'
   [void](Invoke-Merge)
   Assert-Log wt "merge --no-remove -C $fakeWt" $wtLog
-  Assert-Log wt 'remove --foreground feature' $wtLog
+  Assert-Log wt 'remove --foreground -C /repo feature' $wtLog
   Assert-Log herdr 'workspace close ws-feature' $herdrLog
   Refute-Log herdr 'worktree open' $herdrLog
+  Refute-Pane 'press any key to continue'
 
   # The no-squash variant adds its flag; config flags come along too, once each.
   Set-Content -LiteralPath $configFile -Value 'merge_flags = "--no-rebase"'
@@ -153,7 +169,7 @@ try {
   # UI was closed up front (Windows cwd locking), but the checkout still exists.
   $env:WT_STUB_REMOVE_STATUS = '1'
   [void](Invoke-Merge)
-  Assert-Log wt 'remove --foreground feature' $wtLog
+  Assert-Log wt 'remove --foreground -C /repo feature' $wtLog
   Assert-Log herdr 'workspace close ws-feature' $herdrLog
   $reopened = @(Get-LogLines $herdrLog) | Where-Object { $_ -clike "worktree open*--path $fakeWt*--no-focus*" }
   if (-not $reopened) {
@@ -166,18 +182,51 @@ try {
   # removal has succeeded...
   $env:HERDR_WORKSPACE_ID = 'ws-feature'
   [void](Invoke-Merge)
-  Assert-Log wt 'remove --foreground feature' $wtLog
+  Assert-Log wt 'remove --foreground -C /repo feature' $wtLog
   Assert-Log herdr 'workspace close ws-feature' $herdrLog
   Refute-Log herdr 'worktree open' $herdrLog
 
   # ...and a failed removal there neither closes nor reopens it.
   $env:WT_STUB_REMOVE_STATUS = '1'
   [void](Invoke-Merge)
-  Assert-Log wt 'remove --foreground feature' $wtLog
+  Assert-Log wt 'remove --foreground -C /repo feature' $wtLog
   Refute-Log herdr 'workspace close' $herdrLog
   Refute-Log herdr 'worktree open' $herdrLog
   $env:WT_STUB_REMOVE_STATUS = '0'
   Remove-Item Env:\HERDR_WORKSPACE_ID -ErrorAction SilentlyContinue
+
+  # hold_on_merge keeps the pane up after a successful merge. On Windows the
+  # worktree's workspace has already closed by then - it had to, before the
+  # removal - so the hold follows the close...
+  Set-Content -LiteralPath $configFile -Value 'hold_on_merge = true'
+  [void](Invoke-Merge)
+  Assert-Pane 'workspace close ws-feature.*merged feature and removed the worktree\..*press any key to continue'
+
+  # ...except when the action runs inside that workspace: closing it ends the
+  # pane, so there the hold comes first.
+  $env:HERDR_WORKSPACE_ID = 'ws-feature'
+  [void](Invoke-Merge)
+  Assert-Pane 'merged feature and removed the worktree\..*press any key to continue.*workspace close ws-feature'
+  Remove-Item Env:\HERDR_WORKSPACE_ID -ErrorAction SilentlyContinue
+
+  # hold_on_success covers the merge as well, unless hold_on_merge says otherwise.
+  Set-Content -LiteralPath $configFile -Value 'hold_on_success = true'
+  [void](Invoke-Merge)
+  Assert-Pane 'merged feature and removed the worktree\.'
+
+  Set-Content -LiteralPath $configFile -Value @('hold_on_success = true', 'hold_on_merge = false')
+  [void](Invoke-Merge)
+  Refute-Pane 'press any key to continue'
+  Assert-Log herdr 'workspace close ws-feature' $herdrLog
+
+  # A failure keeps its own message whatever the hold settings say.
+  Set-Content -LiteralPath $configFile -Value 'hold_on_success = true'
+  $env:WT_STUB_MERGE_STATUS = '1'
+  [void](Invoke-Merge)
+  Assert-Pane 'wt merge failed \(see above\)\.'
+  Refute-Pane 'merged feature'
+  $env:WT_STUB_MERGE_STATUS = '0'
+  Set-Content -LiteralPath $configFile -Value $null
 } finally {
   $env:Path = $origPath
   foreach ($name in 'WORKTRUNK_BIN', 'WT_STUB_LOG', 'WT_STUB_LIST_FILE', 'WT_STUB_MERGE_STATUS',

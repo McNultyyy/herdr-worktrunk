@@ -27,7 +27,9 @@ printf '%s' "$FZF_STUB_OUT"
 exit "${FZF_STUB_EXIT:-0}"
 EOF
 
-# wt stub: `list` feeds the picker, `switch` records the argv under test.
+# wt stub: `list` feeds the picker, `switch` records the argv under test and
+# answers as worktrunk does — $WT_STUB_ACTION says whether it `created` the worktree
+# or switched to an `existing` one — or fails when $WT_STUB_SWITCH_STATUS asks.
 cat > "$stub_dir/wt" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == list ]]; then
@@ -35,7 +37,10 @@ if [[ ${1:-} == list ]]; then
   exit 0
 fi
 printf '%s ' "$@" > "$STUB_DIR/wt.args"
-printf '{"branch":"%s","path":"%s"}\n' "${2:-}" "$STUB_DIR/checkout"
+[[ $WT_STUB_SWITCH_STATUS != 0 ]] && exit "$WT_STUB_SWITCH_STATUS"
+branch=${2:-}
+[[ $branch == --create ]] && branch=${3:-}
+printf '{"action":"%s","branch":"%s","path":"%s"}\n' "$WT_STUB_ACTION" "$branch" "$STUB_DIR/checkout"
 EOF
 
 # gh stub: the two list commands feed the issue/PR pickers, and `issue view`
@@ -57,14 +62,34 @@ fi
 exit 1
 EOF
 
-# herdr stub: `worktree list` locates the repo root, `worktree open` is the result.
+# herdr stub: `worktree list` locates the repo root and `worktree open` is the
+# workspace-mode result, echoed into the pane so a message can be placed before or
+# after it. In tab mode `tab create` answers with a pane, `pane
+# process-info` describes the shell running in it ($HERDR_STUB_SHELL, or a failure
+# when that is `fail`), and `pane run` records the line typed into it.
 cat > "$stub_dir/herdr" <<'EOF'
 #!/usr/bin/env bash
-if [[ ${1:-} == worktree && ${2:-} == list ]]; then
-  printf '{"result":{"source":{"repo_root":"%s","repo_name":"repo","source_workspace_id":"w1"}}}\n' "$REPO_CWD"
-  exit 0
-fi
-printf '%s ' "$@" > "$STUB_DIR/herdr.args"
+printf '%s\n' "$*" >> "$STUB_DIR/herdr.log"
+case "${1:-} ${2:-}" in
+  "worktree list")
+    printf '{"result":{"source":{"repo_root":"%s","repo_name":"repo","source_workspace_id":"w1"}}}\n' "$REPO_CWD"
+    ;;
+  "worktree open")
+    printf '%s\n' "$*"
+    ;;
+  "tab create")
+    printf '%s\n' "$@" > "$STUB_DIR/tab_create.args"
+    printf '{"result":{"root_pane":{"pane_id":"w1V:p5","tab_id":"w1V:t3"}}}\n'
+    ;;
+  "pane process-info")
+    [[ $HERDR_STUB_SHELL == fail ]] && exit 1
+    printf '{"result":{"process_info":{"shell_pid":42,"foreground_processes":[{"pid":42,"name":"%s"}]}}}\n' \
+      "$HERDR_STUB_SHELL"
+    ;;
+  "pane run")
+    printf '%s\n' "$4" > "$STUB_DIR/pane_run.args"
+    ;;
+esac
 EOF
 
 chmod +x "$stub_dir/fzf" "$stub_dir/wt" "$stub_dir/herdr" "$stub_dir/gh"
@@ -77,10 +102,13 @@ gh_issues='#42  Fix the thing
 #9  Old work'
 gh_prs='#16  feat/eager-worktree-focus  Eager worktree focus'
 
+# The shell herdr reports for a new tab and the $SHELL the picker would fall back
+# to are pinned so the runner's own shell can't leak into the tab-mode cases. With
+# stdin at /dev/null a "press any key" read returns at once.
 run_picker() {
   local out=$1 exit_code=$2
   shift 2
-  rm -f "$stub_dir/wt.args" "$stub_dir/herdr.args"
+  rm -f "$stub_dir/wt.args" "$stub_dir/herdr.log" "$stub_dir/tab_create.args" "$stub_dir/pane_run.args"
   (
     cd "$work_dir/repo"
     PATH="$stub_dir:$PATH" \
@@ -89,6 +117,10 @@ run_picker() {
     FZF_STUB_OUT="$out" \
     FZF_STUB_EXIT="$exit_code" \
     WT_STUB_LIST="$wt_list" \
+    WT_STUB_ACTION="${WT_STUB_ACTION:-created}" \
+    WT_STUB_SWITCH_STATUS="${WT_STUB_SWITCH_STATUS:-0}" \
+    HERDR_STUB_SHELL="${HERDR_STUB_SHELL:-zsh}" \
+    SHELL="${PICKER_SHELL:-/bin/zsh}" \
     HERDR_PLUGIN_ROOT="$repo_root" \
     HERDR_BIN_PATH="$stub_dir/herdr" \
     HERDR_PLUGIN_CONFIG_DIR="$config_dir" \
@@ -98,11 +130,16 @@ run_picker() {
     GH_STUB_PRS="$gh_prs" \
     GH_STUB_TITLE="Add a widget" \
     WT_PICKER_PREFILL="${WT_PICKER_PREFILL:-}" \
-      bash "$repo_root/picker.sh" "$@" >/dev/null 2>&1
+      bash "$repo_root/picker.sh" "$@" </dev/null >"$stub_dir/pane.out" 2>&1
   )
 }
 
 wt_args() { cat "$stub_dir/wt.args" 2>/dev/null || true; }
+pane_run_args() { cat "$stub_dir/pane_run.args" 2>/dev/null || true; }
+herdr_log() { cat "$stub_dir/herdr.log" 2>/dev/null || true; }
+# The pane output flattened to one line, so a pattern can span the order things
+# were shown in.
+pane_out() { tr '\n' ' ' < "$stub_dir/pane.out"; }
 
 assert_eq() {
   local expected=$1 actual=$2 what=${3:-value}
@@ -116,6 +153,14 @@ assert_contains() {
   local needle=$1 haystack=$2 what=${3:-output}
   if [[ $haystack != *"$needle"* ]]; then
     printf 'expected %q in %s %q\n' "$needle" "$what" "$haystack" >&2
+    exit 1
+  fi
+}
+
+refute_contains() {
+  local needle=$1 haystack=$2 what=${3:-output}
+  if [[ $haystack == *"$needle"* ]]; then
+    printf 'unexpected %q in %s %q\n' "$needle" "$what" "$haystack" >&2
     exit 1
   fi
 }
@@ -194,5 +239,132 @@ assert_eq 'switch pr:16 --no-cd --format=json ' "$(wt_args)" 'wt argv'
 # The prefill only applies to the gh sources; the branch picker still asks.
 WT_PICKER_PREFILL=16 run_picker '' 130
 assert_eq '' "$(wt_args)" 'wt argv'
+
+# A created worktree opens its workspace without waiting.
+run_picker $'silas/brand-new' 1
+refute_contains 'press any key to continue' "$(pane_out)" 'pane output'
+assert_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+
+# hold_on_create keeps the pane up once worktrunk has created the worktree, and asks
+# for the key before the workspace opens and takes the focus away.
+printf 'hold_on_create = true\n' > "$config_dir/config.toml"
+run_picker $'silas/brand-new' 1
+if ! pane_out | grep -qE 'created worktree silas/brand-new\..*press any key to continue.*worktree open '; then
+  printf 'expected the hold before worktree open, got %q\n' "$(pane_out)" >&2
+  exit 1
+fi
+assert_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+
+# Switching to a worktree that already exists has nothing to read, so it never holds.
+WT_STUB_ACTION=existing run_picker $'silas/foo-bar' 0
+refute_contains 'press any key to continue' "$(pane_out)" 'pane output'
+assert_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+
+# hold_on_success covers creation as well, unless hold_on_create says otherwise.
+printf 'hold_on_success = true\n' > "$config_dir/config.toml"
+run_picker $'silas/brand-new' 1
+assert_contains 'created worktree silas/brand-new.' "$(pane_out)" 'pane output'
+
+printf 'hold_on_success = true\nhold_on_create = false\n' > "$config_dir/config.toml"
+run_picker $'silas/brand-new' 1
+refute_contains 'press any key to continue' "$(pane_out)" 'pane output'
+
+# A failure keeps its own message whatever the hold settings say.
+printf 'hold_on_success = true\n' > "$config_dir/config.toml"
+if WT_STUB_SWITCH_STATUS=1 run_picker $'silas/brand-new' 1; then
+  printf 'expected picker.sh to fail when wt switch does\n' >&2
+  exit 1
+fi
+assert_contains 'wt switch failed (see above).' "$(pane_out)" 'pane output'
+refute_contains 'created worktree' "$(pane_out)" 'pane output'
+refute_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+: > "$config_dir/config.toml"
+
+# A new name is created as typed by default...
+run_picker $'optimize Stripe loading waterfall' 1
+assert_eq 'switch --create optimize Stripe loading waterfall --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# ...and slugified with slugify_new_branches, keeping the base.
+printf 'slugify_new_branches = true\n' > "$config_dir/config.toml"
+run_picker $'optimize Stripe loading waterfall' 1
+assert_eq 'switch --create optimize-stripe-loading-waterfall --no-cd --format=json ' "$(wt_args)" 'wt argv'
+assert_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+run_picker $'Silas / Brand New' 1 --create-base=current
+assert_eq 'switch --create silas/brand-new --base @ --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# A slug that names an existing branch switches to it.
+run_picker $'Silas / Foo Bar' 1
+assert_eq 'switch silas/foo-bar --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# Existing branches and shortcuts are left alone.
+run_picker $'silas/foo-bar' 0
+assert_eq 'switch silas/foo-bar --no-cd --format=json ' "$(wt_args)" 'wt argv'
+run_picker $'pr:16' 1
+assert_eq 'switch pr:16 --no-cd --format=json ' "$(wt_args)" 'wt argv'
+run_picker $'^' 1
+assert_eq 'switch ^ --no-cd --format=json ' "$(wt_args)" 'wt argv'
+
+# No valid name left fails before wt runs.
+if run_picker $'!!!' 1; then
+  printf 'expected picker.sh to fail when no branch name is left\n' >&2
+  exit 1
+fi
+assert_contains 'no valid branch name in: !!!' "$(pane_out)" 'pane output'
+assert_eq '' "$(wt_args)" 'wt argv'
+refute_contains 'worktree open ' "$(herdr_log)" 'herdr calls'
+
+# Tab mode uses the slug too.
+printf 'slugify_new_branches = true\nopen_mode = "tab"\n' > "$config_dir/config.toml"
+HERDR_STUB_SHELL=nu run_picker $'Optimize Stripe' 1
+assert_contains "print -n (wt switch --create 'optimize-stripe'); bash " "$(pane_run_args)" 'pane run line'
+assert_contains $'--label\noptimize-stripe\n' "$(cat "$stub_dir/tab_create.args")" 'tab create argv'
+: > "$config_dir/config.toml"
+
+# Tab mode never runs wt here: it opens a tab and types `wt switch` into that tab's
+# shell, in the syntax of whichever shell herdr says the tab runs, followed by the
+# relabel step. Nothing else about the picker changes. The exact lines below spell
+# the temp and checkout paths as-is, assuming they hold no shell metacharacters.
+printf 'open_mode = "tab"\n' > "$config_dir/config.toml"
+repo_cwd="$work_dir/repo"
+relabel="$repo_root/tab-relabel.sh"
+
+HERDR_STUB_SHELL=nu run_picker $'silas/brand-new' 1
+assert_eq "print -n (wt switch --create 'silas/brand-new'); bash '$relabel' '$stub_dir/herdr' 'w1V:t3' 'silas/brand-new' '$repo_cwd'" \
+  "$(pane_run_args)" 'pane run line'
+assert_eq '' "$(wt_args)" 'wt argv'
+assert_eq $'tab\ncreate\n--workspace\nw1\n--cwd\n'"$repo_cwd"$'\n--label\nsilas/brand-new\n--focus' \
+  "$(cat "$stub_dir/tab_create.args")" 'tab create argv'
+assert_contains 'pane process-info --pane w1V:p5' "$(herdr_log)" 'herdr calls'
+assert_contains 'pane run w1V:p5 ' "$(herdr_log)" 'herdr calls'
+
+# A POSIX shell gets the && form with %q quoting, and the base comes along.
+HERDR_STUB_SHELL=zsh run_picker $'silas/brand-new' 1 --create-base=current
+assert_eq "wt switch --create silas/brand-new --base @ && bash $relabel $stub_dir/herdr w1V:t3 silas/brand-new $repo_cwd" \
+  "$(pane_run_args)" 'pane run line'
+assert_eq '' "$(wt_args)" 'wt argv'
+
+# Existing branches and worktrunk shortcuts are switched to, never created.
+HERDR_STUB_SHELL=nu run_picker $'silas/foo-bar' 0
+assert_contains "print -n (wt switch 'silas/foo-bar'); bash " "$(pane_run_args)" 'pane run line'
+HERDR_STUB_SHELL=nu run_picker $'pr:16' 1
+assert_contains "print -n (wt switch 'pr:16'); bash " "$(pane_run_args)" 'pane run line'
+HERDR_STUB_SHELL=fish run_picker $'^' 1
+assert_contains 'wt switch \^ && bash ' "$(pane_run_args)" 'pane run line'
+
+# When herdr can't say what the tab runs, $SHELL decides.
+HERDR_STUB_SHELL=fail PICKER_SHELL=/opt/homebrew/bin/nu run_picker $'silas/brand-new' 1
+assert_contains "print -n (wt switch --create 'silas/brand-new'); bash " "$(pane_run_args)" 'pane run line'
+HERDR_STUB_SHELL=fail PICKER_SHELL=/bin/bash run_picker $'silas/brand-new' 1
+assert_contains 'wt switch --create silas/brand-new && bash ' "$(pane_run_args)" 'pane run line'
+
+# wt's output lands in the tab the user keeps, so tab mode has nothing to hold for.
+printf 'open_mode = "tab"\nhold_on_create = true\n' > "$config_dir/config.toml"
+HERDR_STUB_SHELL=zsh run_picker $'silas/brand-new' 1
+refute_contains 'press any key to continue' "$(pane_out)" 'pane output'
+assert_contains 'pane run w1V:p5 ' "$(herdr_log)" 'herdr calls'
+
+# esc still cancels before any tab is opened.
+run_picker '' 130
+assert_eq '' "$(herdr_log)" 'herdr calls'
 
 printf 'picker_test: ok\n'

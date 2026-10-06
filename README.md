@@ -88,11 +88,31 @@ Supported values:
 - `open_mode = "workspace"` — let Worktrunk create or switch the checkout and
   run its hooks, then register that checkout with `herdr worktree open`. Herdr
   displays it as a nested worktree workspace in the sidebar. This is the default.
-- `open_mode = "tab"` — open a new tab in the current workspace and run `wt`
-  there. This preserves the original plugin behavior.
+- `open_mode = "tab"` — open a new tab in the current workspace and run `wt` in
+  that tab's shell. This preserves the original plugin behavior; see
+  [Tab mode and your shell](#tab-mode-and-your-shell).
 
 The config file is read each time the picker runs, so changing the mode does
 not require reinstalling or reloading the plugin.
+
+### Tab mode and your shell
+
+In tab mode the plugin can't run `wt` itself: the new tab has to end up *inside*
+the worktree, and only the shell running in that tab can change its own
+directory. So the picker types a `wt switch …` line into the tab's interactive
+shell, written in that shell's own syntax, followed by a small relabel step
+(`tab-relabel.sh`) that renames the tab after the branch the switch resolved to.
+The plugin asks herdr which shell the tab runs and supports bash, zsh, fish, and
+nushell; any other shell gets the POSIX form.
+
+This needs worktrunk's shell integration installed for that shell — run
+`wt config shell install` and restart the shell — because it is the
+integration's `wt` command that moves the shell into the worktree. Without it
+the worktree is still created, but the tab stays where it was; the plugin says
+so in the tab and leaves it labeled with the name you picked.
+
+Workspace mode (the default) calls `wt` directly and needs none of this. On
+Windows, tab mode works differently; see [Windows](#windows).
 
 ## Remote branches in the picker
 
@@ -105,6 +125,18 @@ show_remote_branches = true
 ```
 
 Local branches without worktrees always appear regardless of this setting.
+
+## Branch names from free text
+
+A new branch is created with the name exactly as typed. To turn a pasted title
+like `Fix Login Bug` into `fix-login-bug`, set `slugify_new_branches` in the same
+`config.toml`:
+
+```toml
+slugify_new_branches = true
+```
+
+Existing branches and worktrunk shortcuts are never changed.
 
 ## Merge flags
 
@@ -174,6 +206,33 @@ The plugin also registers link handlers, so Ctrl+clicking a GitHub issue or pull
 request URL in any pane opens the worktree for it directly, skipping the picker.
 The URL's number is handed to the same flows described above.
 
+## Holding the pane on success
+
+When worktrunk succeeds the picker pane closes straight away, taking the output of
+`wt` and its hooks with it — most noticeably in a popup. To keep the pane up until
+you press a key, set `hold_on_success` in the same `config.toml`:
+
+```toml
+hold_on_success = true
+```
+
+To hold only some actions, set their own keys instead. An action's key wins over
+`hold_on_success`, so it can also switch a single action back off:
+
+```toml
+hold_on_success = true
+hold_on_create = false
+```
+
+- `hold_on_create` — after `wt switch` created a worktree, before its workspace
+  opens. Switching to an existing worktree never holds, and neither does tab mode,
+  where `wt` runs in the tab you keep.
+- `hold_on_merge` — after `wt merge` and the removal that follows it.
+- `hold_on_remove` — after `wt remove`.
+
+All four default to `false`. A failure always keeps the pane up, whatever these
+are set to.
+
 ## Picker presentation
 
 The picker opens in a split pane below the workspace. To open it as a
@@ -205,8 +264,8 @@ popup does not need, so the list fills the popup frame herdr already draws.
 
 ## Requirements
 
-- [**herdr**](https://herdr.dev) ≥ 0.8.0 (the manifest relies on per-item
-  `platforms` overrides)
+- [**herdr**](https://herdr.dev) ≥ 0.7.0 (Windows support was tested with
+  0.9.2-preview)
 - [**worktrunk**](https://github.com/max-sixty/worktrunk) ≥ 0.60.0 — the `wt` CLI on your `PATH`
 - **fzf** — the interactive picker
 - **jq** — JSON parsing (macOS/Linux only; the Windows scripts parse JSON natively)
@@ -250,7 +309,9 @@ Two Windows behaviors differ by design:
   the workspace if the removal then fails or is declined. Panes closed in tab
   mode cannot be brought back that way — decline a removal there and its
   shells stay closed. When the action runs from inside the worktree's own
-  workspace, that workspace is closed only after the removal succeeds.
+  workspace, that workspace is closed only after the removal succeeds. So
+  `hold_on_remove` and `hold_on_merge` wait for the key after the worktree's
+  workspace has already closed, except when the action runs inside it.
 - **Tab mode** (`open_mode = "tab"`) sends a PowerShell command into the new
   tab, so it expects a PowerShell-family default shell. It does not rely on
   worktrunk's shell integration: the sent command switches with `--no-cd` and
@@ -401,6 +462,8 @@ the PowerShell twins — using herdr's item-level `platforms` overrides.
 - `open.sh` / `open.ps1` — the action entrypoint that opens a picker in its
   configured placement
 - `picker.sh` / `picker.ps1` — the switch / create picker
+- `tab-relabel.sh` — the relabel step tab mode types into the new tab after
+  `wt switch` (macOS/Linux; `picker.ps1` relabels inline)
 - `remove.sh` / `remove.ps1` — the remove picker
 - `merge.sh` / `merge.ps1` — the merge picker
 - `lifecycle.sh` / `lifecycle.ps1` — shared steps for the actions that destroy
@@ -410,6 +473,9 @@ the PowerShell twins — using herdr's item-level `platforms` overrides.
 - `tests/lifecycle_test.sh` — candidate/workspace resolution and cleanup checks
 - `tests/merge_test.sh` — merge argument and failure-path checks
 - `tests/open_test.sh` — picker placement / open argument checks
+- `tests/picker_test.sh` — switch / create picker checks in both open modes
+- `tests/remove_test.sh` — remove argument, failure-path and hold checks
+- `tests/tab_relabel_test.sh` — tab relabel checks
 - `tests/*_test.ps1` — Windows ports of the same checks (stubbing wt, fzf, and
   herdr with generated `.cmd` shims); run them all with
   `powershell -NoProfile -ExecutionPolicy Bypass -File tests\run_tests.ps1`

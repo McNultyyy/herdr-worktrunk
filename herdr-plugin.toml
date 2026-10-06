@@ -1,8 +1,7 @@
 id = "worktrunk"
 name = "Worktrunk"
 version = "0.1.0"
-# Item-level `platforms` overrides (used below) are documented from herdr 0.8.
-min_herdr_version = "0.8.0"
+min_herdr_version = "0.7.0"
 description = "Switch, create, remove, or merge git worktrees via worktrunk"
 platforms = ["macos", "linux", "windows"]
 # Workspace actions: open.sh / open.ps1 resolves the workspace's repo and the

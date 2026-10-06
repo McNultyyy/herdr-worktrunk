@@ -80,6 +80,20 @@ function Get-WorktrunkShowRemoteBranches {
   }
 }
 
+# "true"/"false" for whether new branch names are slugified before creation.
+# Disabled by default; set slugify_new_branches = true.
+function Get-WorktrunkSlugifyNewBranches {
+  $value = Get-WorktrunkConfigValue 'slugify_new_branches'
+  switch ($value) {
+    { $_ -ceq '' -or $_ -ceq 'false' } { return 'false' }
+    { $_ -ceq 'true' } { return 'true' }
+    default {
+      Write-WtWarning "unsupported slugify_new_branches `"$value`"; creating names as typed"
+      return 'false'
+    }
+  }
+}
+
 # The configured worktree presentation mode. Native workspace mode is the
 # default; set open_mode = "tab" to keep the original tab-based behavior.
 function Get-WorktrunkOpenMode {
@@ -128,6 +142,21 @@ function Get-WorktrunkPopupDimension([string]$Key) {
   if ($value -match '^[0-9]+%?$') { return $value }
   Write-WtWarning "unsupported $Key `"$value`"; using the default popup size"
   return ''
+}
+
+# "true"/"false" for whether ACTION's pane (create, merge or remove) waits for a
+# key once worktrunk succeeds, so its output can be read before the pane closes.
+# Disabled by default. hold_on_<action> decides for that action alone and wins
+# over hold_on_success, which covers every action; an unsupported value is
+# skipped, so the next key in line still decides.
+function Get-WorktrunkHoldOn([string]$Action) {
+  foreach ($key in @("hold_on_$Action", 'hold_on_success')) {
+    $value = Get-WorktrunkConfigValue $key
+    if ($value -ceq '') { continue }
+    if ($value -ceq 'true' -or $value -ceq 'false') { return $value }
+    Write-WtWarning "unsupported $key `"$value`"; ignoring it"
+  }
+  return 'false'
 }
 
 # The extra flags to pass to `wt merge`, as an array, from the

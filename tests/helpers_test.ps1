@@ -97,6 +97,28 @@ $schemaFailed = $false
 try { Get-WorktrunkListItems '{"schema":3}' | Out-Null } catch { $schemaFailed = $true }
 if (-not $schemaFailed) { Fail 'expected unsupported worktrunk list schema to fail' }
 
+# Branch slugs. The right single quote is built from its code point: this file
+# stays ASCII so Windows PowerShell can't misread it.
+$rsquo = [string][char]0x2019
+foreach ($case in @(
+    @('optimize Stripe loading waterfall', 'optimize-stripe-loading-waterfall'),
+    @("  Fix: user's LOGIN bug!! ", 'fix-user-s-login-bug'),
+    @("fix user${rsquo}s login", 'fix-user-s-login'),
+    @('Feat / Add API v2', 'feat/add-api-v2'),
+    @('//a//b//', 'a/b'),
+    @('v1..2_FIX.', 'v1.2_fix'),
+    @('a/.b', 'a/b'),
+    @('already-a-slug', 'already-a-slug'))) {
+  $slug = ConvertTo-WorktrunkBranchSlug $case[0]
+  if ($slug -cne $case[1]) { Fail "expected branch slug '$($case[1])' for '$($case[0])', got '$slug'" }
+}
+
+# No valid name left: nothing comes back.
+foreach ($text in @('', '!!!', ' - / . ', 'foo.lock')) {
+  $slug = ConvertTo-WorktrunkBranchSlug $text
+  if ($slug -cne '') { Fail "expected no branch slug for '$text', got '$slug'" }
+}
+
 # Windows-side path helpers: herdr mixes \ and / in its JSON, worktrunk emits
 # native separators, and Windows paths compare case-insensitively.
 if ((ConvertTo-WtComparablePath 'C:\Users\x\repo\') -cne 'C:/Users/x/repo') { Fail 'expected backslashes normalized and trailing slash trimmed' }

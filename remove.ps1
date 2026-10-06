@@ -46,7 +46,7 @@ $mainPath = Get-WorktrunkMainPath $wtItems
 # interactively and let worktrunk gate the destructive bits. --foreground keeps
 # the pane until it's done. The guarded remove closes the worktree's herdr UI
 # first (Windows can't delete a process's cwd) and reopens it on failure.
-if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath)) {
+if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath 'remove' "removed $name.")) {
   [Console]::Out.Write("`n$WtEsc[31mwt remove failed (see above).$WtEsc[0m press any key to close")
   Wait-WtAnyKey
   exit 0
