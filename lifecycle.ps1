@@ -70,6 +70,26 @@ function Get-WorktrunkOpenWorkspaceId([string]$WtPath) {
   return ''
 }
 
+# The label of the herdr workspace WORKSPACEID, or '' (no such workspace, or
+# `workspace list` output that doesn't parse). Read it before the workspace
+# closes: reopening the worktree without it gives the workspace herdr's default
+# label, losing e.g. the picker's "branch (typed)" form. Ids compare
+# case-sensitively - herdr's mix cases (w5, wM, wN).
+function Get-WorktrunkWorkspaceLabel([string]$WorkspaceId) {
+  $herdr = $env:HERDR_BIN_PATH
+  if (-not $herdr) { $herdr = 'herdr' }
+
+  $json = & $herdr workspace list 2>$null | Out-String
+  try { $workspaces = (ConvertFrom-Json -InputObject $json).result.workspaces } catch { return '' }
+
+  foreach ($workspace in @($workspaces)) {
+    if ($workspace.workspace_id -ceq $WorkspaceId -and $workspace.label) {
+      return [string]$workspace.label
+    }
+  }
+  return ''
+}
+
 # fzf over the branches in CANDIDATES with PROMPT and HEADER, in the chrome that
 # suits the picker placement. Returns '' when the user cancels.
 function Invoke-WorktrunkPickBranch($Candidates, [string]$Prompt, [string]$Header) {
@@ -112,9 +132,12 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
   # removal, and close just its other panes (the cwd-lock holders) up front.
   $closeSelfAfter = ($WorkspaceId -and $env:HERDR_WORKSPACE_ID -and
     $WorkspaceId -eq $env:HERDR_WORKSPACE_ID)
+  $workspaceLabel = ''
   if ($closeSelfAfter) {
     $closed = Close-WorktrunkWorktreeUi '' $WtPath
   } else {
+    # Only a workspace closed here can need reopening; keep its label for that.
+    if ($WorkspaceId) { $workspaceLabel = Get-WorktrunkWorkspaceLabel $WorkspaceId }
     $closed = Close-WorktrunkWorktreeUi $WorkspaceId $WtPath
   }
   if ($closed -gt 0) {
@@ -139,7 +162,11 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
   }
 
   if ($WorkspaceId -and -not $closeSelfAfter -and (Test-Path -LiteralPath $WtPath)) {
-    & $herdr worktree open --cwd "$PWD" --path $WtPath --no-focus | Out-Null
+    # Under the label it had, not herdr's default. An empty --label value would
+    # vanish from the argv, so the flag is only passed when the label is known.
+    $labelArgs = @()
+    if ($workspaceLabel) { $labelArgs = @('--label', $workspaceLabel) }
+    & $herdr worktree open --cwd "$PWD" --path $WtPath @labelArgs --no-focus | Out-Null
   }
   return $false
 }

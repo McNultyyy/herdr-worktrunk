@@ -38,15 +38,23 @@ try {
   if ($mainPath -cne '/repo') { Fail "expected /repo as the main worktree, got '$mainPath'" }
 
   # Stand in for the herdr binary: `worktree list` answers with one open
-  # workspace, `pane list` with panes inside and outside the worktree, and
-  # everything else records the argv it was called with.
+  # workspace, `workspace list` with that workspace's label and another's,
+  # `pane list` with panes inside and outside the worktree, and everything else
+  # records the argv it was called with.
   $worktreeJson = Join-Path $stubDir 'worktrees.json'
+  $workspaceJson = Join-Path $stubDir 'workspaces.json'
   $paneJson = Join-Path $stubDir 'panes.json'
   $stubLog = Join-Path $stubDir 'log'
   Set-Content -LiteralPath $worktreeJson -Value @'
 {"result":{"worktrees":[
   {"path":"/repo.feature","open_workspace_id":"ws-feature"},
   {"path":"/repo.other"}
+]}}
+'@
+  Set-Content -LiteralPath $workspaceJson -Value @'
+{"result":{"workspaces":[
+  {"workspace_id":"ws-main","label":"repo"},
+  {"workspace_id":"ws-feature","label":"feature (pr:16)"}
 ]}}
 '@
   Set-Content -LiteralPath $paneJson -Value @'
@@ -63,6 +71,10 @@ try {
     'type "%HERDR_WORKTREE_JSON%"',
     'exit /b 0',
     ')',
+    'if "%~1 %~2"=="workspace list" (',
+    'type "%HERDR_WORKSPACE_JSON%"',
+    'exit /b 0',
+    ')',
     'if "%~1 %~2"=="pane list" (',
     'type "%HERDR_PANE_JSON%"',
     'exit /b 0',
@@ -72,6 +84,7 @@ try {
   )
   $env:HERDR_BIN_PATH = $herdrStub
   $env:HERDR_WORKTREE_JSON = $worktreeJson
+  $env:HERDR_WORKSPACE_JSON = $workspaceJson
   $env:HERDR_PANE_JSON = $paneJson
   $env:HERDR_STUB_LOG = $stubLog
   Set-Content -LiteralPath $stubLog -Value $null
@@ -87,6 +100,16 @@ try {
 
   # A worktree herdr has no workspace open on resolves to nothing, not an error.
   if (Get-WorktrunkOpenWorkspaceId '/repo.other') { Fail 'expected no workspace id for /repo.other' }
+
+  # The label a failed removal reopens the workspace under, spaces and all; an
+  # unknown workspace or unreadable output has none, rather than an error.
+  $label = Get-WorktrunkWorkspaceLabel 'ws-feature'
+  if ($label -cne 'feature (pr:16)') { Fail "expected label 'feature (pr:16)', got '$label'" }
+  $label = Get-WorktrunkWorkspaceLabel 'ws-gone'
+  if ($label -cne '') { Fail "expected no label for an unknown workspace, got '$label'" }
+  Set-Content -LiteralPath $workspaceJson -Value 'not json'
+  $label = Get-WorktrunkWorkspaceLabel 'ws-feature'
+  if ($label -cne '') { Fail "expected no label from unparseable output, got '$label'" }
 
   # A native workspace closes as a unit; its panes are not closed individually.
   Close-WorktrunkWorktreeUi 'ws-feature' '/repo.feature'
@@ -140,6 +163,7 @@ try {
 } finally {
   $env:HERDR_BIN_PATH = $null
   $env:HERDR_WORKTREE_JSON = $null
+  $env:HERDR_WORKSPACE_JSON = $null
   $env:HERDR_PANE_JSON = $null
   $env:HERDR_STUB_LOG = $null
   Remove-Item -Recurse -Force -LiteralPath $stubDir -ErrorAction SilentlyContinue

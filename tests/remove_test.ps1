@@ -20,6 +20,7 @@ try {
   $herdrLog = Join-Path $stubDir 'herdr.log'
   $listFile = Join-Path $stubDir 'wt-list.json'
   $worktreeJson = Join-Path $stubDir 'worktrees.json'
+  $workspaceJson = Join-Path $stubDir 'workspaces.json'
   $pickFile = Join-Path $stubDir 'fzf-pick.txt'
   $configFile = Join-Path $configDir 'config.toml'
 
@@ -57,12 +58,19 @@ try {
   )
 
   # herdr also echoes its calls into the pane, so a message can be placed before
-  # or after them.
+  # or after them. The feature workspace's label has the spaces and parentheses
+  # the picker's "branch (typed)" labels carry.
   Set-Content -LiteralPath $worktreeJson -Value "{`"result`":{`"worktrees`":[{`"path`":`"$fakeWtFwd`",`"open_workspace_id`":`"ws-feature`"}]}}"
+  $workspaceListJson = '{"result":{"workspaces":[{"workspace_id":"ws-main","label":"repo"},{"workspace_id":"ws-feature","label":"feature (pr:16)"}]}}'
+  Set-Content -LiteralPath $workspaceJson -Value $workspaceListJson
   Set-Content -LiteralPath (Join-Path $stubDir 'herdr.cmd') -Value @(
     '@echo off',
     'if "%~1 %~2"=="worktree list" (',
     'type "%HERDR_WORKTREE_JSON%"',
+    'exit /b 0',
+    ')',
+    'if "%~1 %~2"=="workspace list" (',
+    'type "%HERDR_WORKSPACE_JSON%"',
     'exit /b 0',
     ')',
     '>> "%HERDR_STUB_LOG%" echo %*',
@@ -77,6 +85,7 @@ try {
   $env:WT_STUB_REMOVE_STATUS = '0'
   $env:HERDR_BIN_PATH = Join-Path $stubDir 'herdr.cmd'
   $env:HERDR_WORKTREE_JSON = $worktreeJson
+  $env:HERDR_WORKSPACE_JSON = $workspaceJson
   $env:HERDR_STUB_LOG = $herdrLog
   $env:HERDR_PLUGIN_ROOT = $repoRoot
   $env:HERDR_PLUGIN_CONFIG_DIR = $configDir
@@ -145,6 +154,24 @@ try {
   if (-not $reopened) {
     Fail "expected the workspace to be reopened after a failed removal, got:`n$(@(Get-LogLines $herdrLog) -join "`n")"
   }
+
+  # It comes back under the label it had rather than herdr's default. The
+  # stub's %* keeps the quotes PowerShell puts around an argument with spaces,
+  # so the label shows up quoted - as the one argument it is.
+  $relabeled = @(Get-LogLines $herdrLog) | Where-Object { $_ -clike "worktree open*--label `"feature (pr:16)`" --no-focus*" }
+  if (-not $relabeled) {
+    Fail "expected the reopened workspace to keep its label, got:`n$(@(Get-LogLines $herdrLog) -join "`n")"
+  }
+
+  # With no label to restore, --label is left out entirely: an empty value
+  # would vanish from the argv and leave the flag swallowing --no-focus.
+  Set-Content -LiteralPath $workspaceJson -Value '{"result":{"workspaces":[]}}'
+  Invoke-Remove
+  $reopened = @(Get-LogLines $herdrLog) | Where-Object { $_ -clike "worktree open*--path $fakeWt --no-focus" }
+  if (-not $reopened) {
+    Fail "expected a reopen without --label when the label is unknown, got:`n$(@(Get-LogLines $herdrLog) -join "`n")"
+  }
+  Set-Content -LiteralPath $workspaceJson -Value $workspaceListJson
   $env:WT_STUB_REMOVE_STATUS = '0'
 
   # hold_on_remove keeps the pane up after a successful removal. The worktree's
@@ -202,8 +229,9 @@ try {
 } finally {
   $env:Path = $origPath
   foreach ($name in 'WORKTRUNK_BIN', 'WT_STUB_LOG', 'WT_STUB_LIST_FILE', 'WT_STUB_REMOVE_STATUS',
-                    'HERDR_BIN_PATH', 'HERDR_WORKTREE_JSON', 'HERDR_STUB_LOG', 'HERDR_PLUGIN_ROOT',
-                    'HERDR_PLUGIN_CONFIG_DIR', 'HERDR_WORKSPACE_ID', 'FZF_STUB_PICK_FILE', 'WT_STUB_REMOVE_DIR') {
+                    'HERDR_BIN_PATH', 'HERDR_WORKTREE_JSON', 'HERDR_WORKSPACE_JSON', 'HERDR_STUB_LOG',
+                    'HERDR_PLUGIN_ROOT', 'HERDR_PLUGIN_CONFIG_DIR', 'HERDR_WORKSPACE_ID', 'FZF_STUB_PICK_FILE',
+                    'WT_STUB_REMOVE_DIR') {
     Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
   }
   Remove-Item -Recurse -Force -LiteralPath $stubDir -ErrorAction SilentlyContinue
