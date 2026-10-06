@@ -24,9 +24,11 @@ try {
   $configFile = Join-Path $configDir 'config.toml'
 
   # Stand in for `wt`: list answers with one removable worktree, and remove
-  # records its argv and fails when the test asks it to. The feature worktree is
-  # a real directory: a failed removal only reopens the workspace when the
-  # checkout still exists on disk.
+  # records its argv and fails when the test asks it to - or, with
+  # $env:WT_STUB_REMOVE_DIR set, really deletes that directory, which Windows
+  # refuses while any process has it as its working directory. The feature
+  # worktree is a real directory: a failed removal only reopens the workspace
+  # when the checkout still exists on disk.
   $fakeWt = Join-Path $stubDir 'repo.feature'
   New-Item -ItemType Directory -Path $fakeWt | Out-Null
   $fakeWtFwd = $fakeWt -replace '\\', '/'
@@ -41,8 +43,9 @@ try {
     'type "%WT_STUB_LIST_FILE%"',
     'exit /b 0',
     ')',
-    'if "%~1"=="remove" exit /b %WT_STUB_REMOVE_STATUS%',
-    'exit /b 0'
+    'if not "%~1"=="remove" exit /b 0',
+    'if defined WT_STUB_REMOVE_DIR rmdir "%WT_STUB_REMOVE_DIR%" || exit /b 1',
+    'exit /b %WT_STUB_REMOVE_STATUS%'
   )
 
   # fzf picks whatever the pick file holds; the picker's stdin is drained either way.
@@ -174,11 +177,33 @@ try {
   Assert-Pane 'wt remove failed \(see above\)\.'
   Refute-Pane 'removed feature'
   $env:WT_STUB_REMOVE_STATUS = '0'
+  Set-Content -LiteralPath $configFile -Value $null
+
+  # Run from inside the worktree it removes - a pane in that worktree's own
+  # workspace - the script has to let go of the directory before worktrunk
+  # deletes it: not just PowerShell's location, but the process's working
+  # directory, which is what Windows locks. Last, since the checkout goes away.
+  $fakeMain = Join-Path $stubDir 'repo'
+  New-Item -ItemType Directory -Path $fakeMain | Out-Null
+  Set-Content -LiteralPath $listFile -Value (ConvertTo-Json -Compress -Depth 5 -InputObject @(
+    @{ branch = 'main'; kind = 'worktree'; path = $fakeMain; is_main = $true },
+    @{ branch = 'feature'; kind = 'worktree'; path = $fakeWt; is_main = $false }
+  ))
+  $env:WT_STUB_REMOVE_DIR = $fakeWt
+  $env:HERDR_WORKSPACE_ID = 'ws-feature'
+  Push-Location -LiteralPath $fakeWt
+  try { Invoke-Remove } finally { Pop-Location }
+  Remove-Item Env:\WT_STUB_REMOVE_DIR, Env:\HERDR_WORKSPACE_ID -ErrorAction SilentlyContinue
+  Assert-Log wt "remove --foreground -C $fakeMain feature" $wtLog
+  if (Test-Path -LiteralPath $fakeWt) {
+    Fail "expected the worktree to be deletable once the script stepped out of it; pane showed:`n$script:paneOut"
+  }
+  Assert-Log herdr 'workspace close ws-feature' $herdrLog
 } finally {
   $env:Path = $origPath
   foreach ($name in 'WORKTRUNK_BIN', 'WT_STUB_LOG', 'WT_STUB_LIST_FILE', 'WT_STUB_REMOVE_STATUS',
                     'HERDR_BIN_PATH', 'HERDR_WORKTREE_JSON', 'HERDR_STUB_LOG', 'HERDR_PLUGIN_ROOT',
-                    'HERDR_PLUGIN_CONFIG_DIR', 'HERDR_WORKSPACE_ID', 'FZF_STUB_PICK_FILE') {
+                    'HERDR_PLUGIN_CONFIG_DIR', 'HERDR_WORKSPACE_ID', 'FZF_STUB_PICK_FILE', 'WT_STUB_REMOVE_DIR') {
     Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
   }
   Remove-Item -Recurse -Force -LiteralPath $stubDir -ErrorAction SilentlyContinue

@@ -97,9 +97,14 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
   if (-not $herdr) { $herdr = 'herdr' }
 
   # This script itself holds a cwd lock when its pane was opened inside the
-  # worktree being removed - step out to the main checkout first.
-  if ((Test-WtPathPrefix "$PWD" $WtPath) -and $MainPath -and (Test-Path -LiteralPath $MainPath)) {
+  # worktree being removed - step out to the main checkout first. Set-Location
+  # only moves PowerShell's own location; the lock is on the process's working
+  # directory, which has to move as well.
+  $inWorktree = (Test-WtPathPrefix "$PWD" $WtPath) -or
+                (Test-WtPathPrefix ([Environment]::CurrentDirectory) $WtPath)
+  if ($inWorktree -and $MainPath -and (Test-Path -LiteralPath $MainPath)) {
     Set-Location -LiteralPath $MainPath
+    [Environment]::CurrentDirectory = (Get-Location).ProviderPath
   }
 
   # Closing the workspace this script's own pane lives in would kill the script
