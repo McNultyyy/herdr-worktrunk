@@ -58,7 +58,7 @@ function Get-WorktrunkOpenWorkspaceId([string]$WtPath) {
   $herdr = $env:HERDR_BIN_PATH
   if (-not $herdr) { $herdr = 'herdr' }
 
-  $json = & $herdr worktree list --cwd "$PWD" --json 2>$null | Out-String
+  $json = & $herdr worktree list --cwd (Get-WtCurrentPath) --json 2>$null | Out-String
   try { $worktrees = (ConvertFrom-Json -InputObject $json).result.worktrees } catch { return '' }
 
   $wanted = ConvertTo-WtComparablePath $WtPath
@@ -120,11 +120,11 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
   # worktree being removed - step out to the main checkout first. Set-Location
   # only moves PowerShell's own location; the lock is on the process's working
   # directory, which has to move as well.
-  $inWorktree = (Test-WtPathPrefix "$PWD" $WtPath) -or
+  $inWorktree = (Test-WtPathPrefix (Get-WtCurrentPath) $WtPath) -or
                 (Test-WtPathPrefix ([Environment]::CurrentDirectory) $WtPath)
   if ($inWorktree -and $MainPath -and (Test-Path -LiteralPath $MainPath)) {
     Set-Location -LiteralPath $MainPath
-    [Environment]::CurrentDirectory = (Get-Location).ProviderPath
+    [Environment]::CurrentDirectory = Get-WtCurrentPath
   }
 
   # Closing the workspace this script's own pane lives in would kill the script
@@ -166,7 +166,7 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
     # vanish from the argv, so the flag is only passed when the label is known.
     $labelArgs = @()
     if ($workspaceLabel) { $labelArgs = @('--label', $workspaceLabel) }
-    & $herdr worktree open --cwd "$PWD" --path $WtPath @labelArgs --no-focus | Out-Null
+    & $herdr worktree open --cwd (Get-WtCurrentPath) --path $WtPath @labelArgs --no-focus | Out-Null
   }
   return $false
 }

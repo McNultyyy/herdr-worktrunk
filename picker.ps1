@@ -138,7 +138,7 @@ if ($openMode -eq 'tab') {
     Start-Sleep -Seconds 2
     exit 1
   }
-  $tabJson = & $herdr tab create --workspace $env:HERDR_WORKSPACE_ID --cwd "$PWD" --label $name `
+  $tabJson = & $herdr tab create --workspace $env:HERDR_WORKSPACE_ID --cwd (Get-WtCurrentPath) --label $name `
     --env "WT_PICKER_NAME=$name" --focus | Out-String
   $rootPane = $null
   try { $rootPane = (ConvertFrom-Json -InputObject $tabJson).result.root_pane } catch {}
@@ -240,7 +240,7 @@ if ([string]$switchAction -ceq 'created') {
 # workspace, $env:HERDR_WORKSPACE_ID is that worktree's own (linked-worktree)
 # workspace, which `worktree open` rejects. Resolve the repository root instead;
 # Herdr reuses its parent workspace or creates one when absent.
-$sourceJson = & $herdr worktree list --cwd "$PWD" --json 2>$null | Out-String
+$sourceJson = & $herdr worktree list --cwd (Get-WtCurrentPath) --json 2>$null | Out-String
 $source = $null
 try { $source = (ConvertFrom-Json -InputObject $sourceJson).result.source } catch {}
 $repoRoot = [string]$source.repo_root

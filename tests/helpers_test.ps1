@@ -145,5 +145,27 @@ foreach ($path in @('\\server\share\repo', '//server/share/repo/', '\\?\UNC\serv
   if (Test-WtRootPath $path) { Fail "expected '$path' not to be treated as a root" }
 }
 
+# The current directory reaches herdr as a plain path. On a network share
+# "$PWD" is provider-qualified (Microsoft.PowerShell.Core\FileSystem::\\...),
+# so the scripts must never pass it on. The share case needs the local admin
+# share; it is skipped where that is not reachable.
+Push-Location -LiteralPath $env:SystemRoot
+try {
+  if ((Get-WtCurrentPath) -ne $env:SystemRoot) { Fail "expected '$env:SystemRoot', got '$(Get-WtCurrentPath)'" }
+} finally { Pop-Location }
+$share = '\\localhost\' + $env:SystemDrive.TrimEnd(':') + '$' + $env:SystemRoot.Substring(2)
+if (Test-Path -LiteralPath $share) {
+  Push-Location -LiteralPath $share
+  try {
+    if ((Get-WtCurrentPath) -ne $share) { Fail "expected '$share' from a share, got '$(Get-WtCurrentPath)'" }
+  } finally { Pop-Location }
+} else {
+  Write-Output "  (skipped the network-share case: $share is not reachable)"
+}
+$scripts = Get-ChildItem -LiteralPath $repoRoot -Filter '*.ps1' -File
+foreach ($hit in @($scripts | Select-String -SimpleMatch '"$PWD"' | Where-Object { $_.Line -notmatch '^\s*#' })) {
+  Fail "use Get-WtCurrentPath, not `"`$PWD`": $($hit.Filename):$($hit.LineNumber)"
+}
+
 Write-Output 'helpers tests passed'
 exit 0

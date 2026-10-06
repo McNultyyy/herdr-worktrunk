@@ -92,6 +92,14 @@ function Wait-WorktrunkHoldPane([string]$Action, [string]$Message) {
   }
 }
 
+# The current directory as a plain filesystem path, for herdr's --cwd and for
+# path comparisons. "$PWD" is not that on a network share: it renders as
+# Microsoft.PowerShell.Core\FileSystem::\\server\share\..., which herdr can't
+# resolve and ConvertTo-WtComparablePath can't normalize.
+function Get-WtCurrentPath {
+  return (Get-Location).ProviderPath
+}
+
 # A path shaped for comparison: extended-length prefix dropped (`\\?\C:\...`
 # becomes C:\..., `\\?\UNC\server\share` becomes \\server\share, as the entry
 # scripts do for the plugin root), separators forward, no trailing slash
