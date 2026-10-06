@@ -131,7 +131,7 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
   # before the removal happens - close that workspace only AFTER a successful
   # removal, and close just its other panes (the cwd-lock holders) up front.
   $closeSelfAfter = ($WorkspaceId -and $env:HERDR_WORKSPACE_ID -and
-    $WorkspaceId -eq $env:HERDR_WORKSPACE_ID)
+    $WorkspaceId -ceq $env:HERDR_WORKSPACE_ID)
   $workspaceLabel = ''
   if ($closeSelfAfter) {
     $closed = Close-WorktrunkWorktreeUi '' $WtPath
@@ -191,7 +191,7 @@ function Close-WorktrunkWorktreeUi([string]$WorkspaceId, [string]$WtPath) {
 
   $count = 0
   foreach ($pane in @($panes)) {
-    if ($pane.pane_id -eq $env:HERDR_PANE_ID) { continue }
+    if ($pane.pane_id -ceq $env:HERDR_PANE_ID) { continue }
     if (Test-WtPathPrefix $pane.cwd $WtPath) {
       & $herdr pane close $pane.pane_id | Out-Host
       $count++
