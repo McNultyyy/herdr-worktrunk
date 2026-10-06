@@ -33,6 +33,10 @@ try {
   $path = Get-WorktrunkWorktreePath $items 'feature'
   if ($path -cne '/repo.feature') { Fail "expected /repo.feature, got '$path'" }
 
+  # The removal runs from the main worktree, wherever the pane happens to be.
+  $mainPath = Get-WorktrunkMainPath $items
+  if ($mainPath -cne '/repo') { Fail "expected /repo as the main worktree, got '$mainPath'" }
+
   # Stand in for the herdr binary: `worktree list` answers with one open
   # workspace, `pane list` with panes inside and outside the worktree, and
   # everything else records the argv it was called with.

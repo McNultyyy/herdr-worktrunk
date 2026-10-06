@@ -81,7 +81,7 @@ if ($LASTEXITCODE -ne 0) {
 # remove closes the worktree's herdr UI first (Windows can't delete a process's
 # cwd) and reopens it when the removal fails - the workspace still holds a
 # live worktree in that case.
-if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath)) {
+if (-not (Invoke-WorktrunkGuardedRemove $name $wsid $wtPath $mainPath 'merge' "merged $name and removed the worktree.")) {
   [Console]::Out.Write("`n$WtEsc[31mmerged, but wt remove failed (see above).$WtEsc[0m press any key to close")
   Wait-WtAnyKey
   exit 0

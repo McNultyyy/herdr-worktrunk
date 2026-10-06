@@ -22,6 +22,26 @@ function Test-WorktrunkRefExists([string]$Name) {
   return ($LASTEXITCODE -eq 0)
 }
 
+# TEXT as a lowercase, hyphenated branch name, e.g. "Fix Login Bug" ->
+# "fix-login-bug". Keeps `/`, `.` and `_`; returns '' when no valid name is
+# left. Only A-Z is lowercased, as `LC_ALL=C tr` does in helpers.sh: every other
+# character outside [a-z0-9._/] folds into a dash either way, and a culture-aware
+# lowercase could turn some of them into ASCII letters instead.
+function ConvertTo-WorktrunkBranchSlug([string]$Text) {
+  $slug = [regex]::Replace($Text, '[A-Z]', { param($m) $m.Value.ToLowerInvariant() })
+  $slug = $slug -creplace '[^a-z0-9._/]+', '-'
+  $slug = $slug -creplace '-*/+-*', '/'
+  $slug = $slug -creplace '\.{2,}', '.'
+  $slug = $slug -creplace '/\.+', '/'
+  $slug = $slug -creplace '^[-/.]+', ''
+  $slug = $slug -creplace '[-/.]+$', ''
+
+  if (-not $slug) { return '' }
+  git check-ref-format "refs/heads/$slug" 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { return '' }
+  return $slug
+}
+
 # Normalize the worktrunk list JSON into objects with the schema 1 location
 # fields (`kind`, `path`, `is_main`) plus `branch` at the top level. Worktrunk's
 # JSON schema 2 wraps items in an envelope and nests those fields under
@@ -58,6 +78,17 @@ function Get-WorktrunkListItems([string]$Json) {
     if ($item.PSObject.Properties['branch']) { $branch = $item.branch }
 
     [pscustomobject]@{ kind = $kind; path = $path; is_main = $isMain; branch = $branch }
+  }
+}
+
+# Keep the pane up with MESSAGE until a key is pressed, when the configuration
+# holds ACTION (see Get-WorktrunkHoldOn in config.ps1). Call it once worktrunk
+# has succeeded and before herdr is asked to change anything: the pane can sit
+# in a workspace that is about to close or lose focus.
+function Wait-WorktrunkHoldPane([string]$Action, [string]$Message) {
+  if ((Get-WorktrunkHoldOn $Action) -eq 'true') {
+    [Console]::Out.Write("`n$WtEsc[32m$Message$WtEsc[0m press any key to continue")
+    Wait-WtAnyKey
   }
 }
 

@@ -94,6 +94,19 @@ if (Get-Command fzf -CommandType Application -ErrorAction SilentlyContinue) {
 }
 if (-not $name) { exit 0 }
 
+# Slugify a new branch name. The slug may name an existing branch, which the
+# check below then switches to.
+if ((Get-WorktrunkSlugifyNewBranches) -eq 'true' -and
+    -not (Test-WorktrunkShortcut $name) -and -not (Test-WorktrunkRefExists $name)) {
+  $slug = ConvertTo-WorktrunkBranchSlug $name
+  if (-not $slug) {
+    [Console]::Out.Write("$WtEsc[31mno valid branch name in: $name$WtEsc[0m press any key to close")
+    Wait-WtAnyKey
+    exit 1
+  }
+  $name = $slug
+}
+
 $openMode = Get-WorktrunkOpenMode
 
 # Existing local or remote-tracking branch -> switch (wt creates the worktree if
@@ -131,7 +144,7 @@ if ($openMode -eq 'tab') {
   try { $rootPane = (ConvertFrom-Json -InputObject $tabJson).result.root_pane } catch {}
   $newPane = [string]$rootPane.pane_id
   $tabId = [string]$rootPane.tab_id
-  if (-not $newPane) {
+  if (-not $newPane -or -not $tabId) {
     Write-WtError 'failed to open worktree tab'
     Start-Sleep -Seconds 2
     exit 1
@@ -187,10 +200,12 @@ $resultJson = [string]::Join("`n", @($resultLines))
 # name alongside in parens when it differs.
 $resolvedBranch = $null
 $wtPath = $null
+$switchAction = $null
 try {
   $result = ConvertFrom-Json -InputObject $resultJson
   $resolvedBranch = $result.branch
   $wtPath = $result.path
+  $switchAction = $result.action
 } catch {}
 
 if (-not $resolvedBranch) { $label = $name }
@@ -211,6 +226,13 @@ if (-not $wtPath) {
   Write-WtError "worktrunk returned no worktree path for: $name"
   Start-Sleep -Seconds 2
   exit 1
+}
+
+# Only a worktree worktrunk just created has hook output worth reading; a switch
+# to an existing one opens straight away. Hold before the workspace opens below -
+# it takes the focus with it.
+if ([string]$switchAction -ceq 'created') {
+  Wait-WorktrunkHoldPane 'create' "created worktree $label."
 }
 
 # Register the worktree under the repo's ROOT workspace, not the picker pane's

@@ -87,7 +87,12 @@ function Invoke-WorktrunkPickBranch($Candidates, [string]$Prompt, [string]$Heade
 # after. When worktrunk then refuses or fails, the workspace is reopened so a
 # failed removal doesn't also cost the user their UI (closed tab-mode panes
 # have no such undo - their shells are gone).
-function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [string]$WtPath, [string]$MainPath) {
+#
+# HOLDACTION and HOLDMESSAGE are handed to Wait-WorktrunkHoldPane once the
+# removal succeeds. The hold comes after the removal (the UI had to close
+# first), but before this pane's own workspace closes, which ends the pane.
+function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [string]$WtPath, [string]$MainPath,
+                                       [string]$HoldAction, [string]$HoldMessage) {
   $herdr = $env:HERDR_BIN_PATH
   if (-not $herdr) { $herdr = 'herdr' }
 
@@ -112,8 +117,15 @@ function Invoke-WorktrunkGuardedRemove([string]$Branch, [string]$WorkspaceId, [s
     Start-Sleep -Seconds 2
   }
 
-  & $WtBin remove --foreground $Branch
+  # -C runs it from the main checkout: removing the worktree the pane sits in
+  # makes worktrunk try to cd the shell back to the main one, and this pane has
+  # no shell integration for that, so it would warn on every such removal. A
+  # null -C value would vanish from the argv, so it is only passed when known.
+  $removeArgs = @('remove', '--foreground')
+  if ($MainPath) { $removeArgs += @('-C', $MainPath) }
+  & $WtBin @removeArgs $Branch
   if ($LASTEXITCODE -eq 0) {
+    if ($HoldAction) { Wait-WorktrunkHoldPane $HoldAction $HoldMessage }
     if ($closeSelfAfter) {
       # Kills this very pane; nothing may follow this line.
       & $herdr workspace close $WorkspaceId | Out-Host

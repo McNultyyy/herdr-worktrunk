@@ -101,7 +101,8 @@ integration's `wt` command that moves the shell into the worktree. Without it
 the worktree is still created, but the tab stays where it was; the plugin says
 so in the tab and leaves it labeled with the name you picked.
 
-Workspace mode (the default) calls `wt` directly and needs none of this.
+Workspace mode (the default) calls `wt` directly and needs none of this. On
+Windows, tab mode works differently; see [Windows](#windows).
 
 ## Remote branches in the picker
 
@@ -241,7 +242,9 @@ Two Windows behaviors differ by design:
   the workspace if the removal then fails or is declined. Panes closed in tab
   mode cannot be brought back that way — decline a removal there and its
   shells stay closed. When the action runs from inside the worktree's own
-  workspace, that workspace is closed only after the removal succeeds.
+  workspace, that workspace is closed only after the removal succeeds. So
+  `hold_on_remove` and `hold_on_merge` wait for the key after the worktree's
+  workspace has already closed, except when the action runs inside it.
 - **Tab mode** (`open_mode = "tab"`) sends a PowerShell command into the new
   tab, so it expects a PowerShell-family default shell. It does not rely on
   worktrunk's shell integration: the sent command switches with `--no-cd` and

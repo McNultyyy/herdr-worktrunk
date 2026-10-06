@@ -104,6 +104,51 @@ try {
   Set-Content -LiteralPath $configFile -Value "worktrunk_bin = ''"
   Assert-Eq '' (Get-WorktrunkConfigValue 'worktrunk_bin') 'worktrunk_bin'
 
+  Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'   # unrelated key -> default
+  Assert-Eq 'false' (Get-WorktrunkSlugifyNewBranches) 'slugify_new_branches'
+  Set-Content -LiteralPath $configFile -Value 'slugify_new_branches = true'
+  Assert-Eq 'true' (Get-WorktrunkSlugifyNewBranches) 'slugify_new_branches'
+  Set-Content -LiteralPath $configFile -Value 'slugify_new_branches = "false"'
+  Assert-Eq 'false' (Get-WorktrunkSlugifyNewBranches) 'slugify_new_branches'
+  Set-Content -LiteralPath $configFile -Value 'slugify_new_branches = yes'      # unsupported -> default
+  Assert-Eq 'false' (Get-WorktrunkSlugifyNewBranches 2>$null) 'slugify_new_branches'
+
+  function Assert-Hold([string]$Action, [string]$Expected) {
+    Assert-Eq $Expected (Get-WorktrunkHoldOn $Action 2>$null) "hold on $Action"
+  }
+
+  Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'   # unrelated key -> default
+  Assert-Hold create false
+  Assert-Hold merge false
+  Assert-Hold remove false
+
+  Set-Content -LiteralPath $configFile -Value 'hold_on_success = true'          # covers every action
+  Assert-Hold create true
+  Assert-Hold merge true
+  Assert-Hold remove true
+
+  Set-Content -LiteralPath $configFile -Value 'hold_on_merge = "true"'          # one action, quoted also ok
+  Assert-Hold create false
+  Assert-Hold merge true
+  Assert-Hold remove false
+
+  # The action's own key wins over hold_on_success, in either direction.
+  Set-Content -LiteralPath $configFile -Value @('hold_on_success = true', 'hold_on_remove = false')
+  Assert-Hold create true
+  Assert-Hold merge true
+  Assert-Hold remove false
+
+  Set-Content -LiteralPath $configFile -Value @('hold_on_success = false', 'hold_on_create = true')
+  Assert-Hold create true
+  Assert-Hold merge false
+
+  # An unsupported value is ignored, so the next key in line still decides.
+  Set-Content -LiteralPath $configFile -Value @('hold_on_success = true', 'hold_on_merge = maybe')
+  Assert-Hold merge true
+
+  Set-Content -LiteralPath $configFile -Value 'hold_on_success = maybe'
+  Assert-Hold merge false
+
   # herdr may hand the config dir over in extended-length form (\\?\C:\...),
   # like it does the plugin root; values must still be found.
   Set-Content -LiteralPath $configFile -Value 'open_mode = "tab"'
