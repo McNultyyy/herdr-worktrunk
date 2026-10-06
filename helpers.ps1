@@ -92,18 +92,23 @@ function Wait-WorktrunkHoldPane([string]$Action, [string]$Message) {
   }
 }
 
-# A path shaped for comparison: `\\?\` prefix dropped, separators forward, no
-# trailing slash (drive roots keep theirs). Needed because herdr's own JSON
-# mixes styles on Windows - repo_root comes back as C:\Users\... while
-# worktrees[].path is C:/Users/... - and worktrunk emits its own flavor.
-# Compare results with -eq (case-insensitive in PowerShell), or via
-# Test-WtPathPrefix for containment.
+# A path shaped for comparison: extended-length prefix dropped (`\\?\C:\...`
+# becomes C:\..., `\\?\UNC\server\share` becomes \\server\share, as the entry
+# scripts do for the plugin root), separators forward, no trailing slash
+# (drive roots keep theirs, and a UNC path keeps its leading //). Needed
+# because herdr's own JSON mixes styles on Windows - repo_root comes back as
+# C:\Users\... while worktrees[].path is C:/Users/... - and worktrunk emits its
+# own flavor. Compare results with -eq (case-insensitive in PowerShell), or
+# via Test-WtPathPrefix for containment.
 function ConvertTo-WtComparablePath([string]$Path) {
   if (-not $Path) { return '' }
   $p = $Path
-  if ($p.StartsWith('\\?\')) { $p = $p.Substring(4) }
+  if ($p.StartsWith('\\?\UNC\')) { $p = '\\' + $p.Substring(8) }
+  elseif ($p.StartsWith('\\?\')) { $p = $p.Substring(4) }
   $p = $p -replace '\\', '/'
-  while ($p.Length -gt 1 -and $p.EndsWith('/') -and -not ($p -match '^[A-Za-z]:/$')) {
+  $floor = 1
+  if ($p.StartsWith('//')) { $floor = 2 }
+  while ($p.Length -gt $floor -and $p.EndsWith('/') -and -not ($p -match '^[A-Za-z]:/$')) {
     $p = $p.Substring(0, $p.Length - 1)
   }
   return $p
@@ -120,12 +125,13 @@ function Test-WtPathPrefix([string]$Child, [string]$Parent) {
   return $c.StartsWith($p, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-# True when PATH normalizes to a filesystem root ('/', 'C:' or 'C:/') - the
-# guard the pane-closing cleanup uses so a degenerate worktree path can never
-# match every pane on the drive.
+# True when PATH normalizes to a filesystem root ('/', 'C:', 'C:/', or a bare
+# network server or share such as //server/share) - the guard the pane-closing
+# cleanup uses so a degenerate worktree path can never match every pane on the
+# drive or share.
 function Test-WtRootPath([string]$Path) {
   $p = ConvertTo-WtComparablePath $Path
-  return ($p -eq '' -or $p -match '^([A-Za-z]:)?/?$')
+  return ($p -eq '' -or $p -match '^([A-Za-z]:)?/?$' -or $p -match '^//[^/]*(/[^/]+)?$')
 }
 
 # The worktrunk executable to run. On a stock Windows PATH, `wt` is Windows

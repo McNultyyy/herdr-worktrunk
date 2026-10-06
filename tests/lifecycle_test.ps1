@@ -117,6 +117,26 @@ try {
   Clear-WtStubLog
   Close-WorktrunkWorktreeUi '' 'C:/x/repo.feature'
   if ((Get-WtStubLog) -cne 'pane close p-win') { Fail "unexpected mixed-separator pane close calls:`n$(Get-WtStubLog)" }
+
+  # A worktree on a network share: herdr and worktrunk can each hand over the
+  # \\?\UNC\, \\server or //server form, and resolution and cleanup still have
+  # to line up.
+  Set-Content -LiteralPath $worktreeJson -Value '{"result":{"worktrees":[{"path":"//server/share/repo.feature","open_workspace_id":"ws-unc"}]}}'
+  $wsid = Get-WorktrunkOpenWorkspaceId '\\?\UNC\server\share\repo.feature'
+  if ($wsid -cne 'ws-unc') { Fail "expected ws-unc for an extended-length UNC path, got '$wsid'" }
+
+  Set-Content -LiteralPath $paneJson -Value '{"result":{"panes":[{"pane_id":"p-unc","cwd":"\\\\?\\UNC\\server\\share\\repo.feature\\sub"},{"pane_id":"p-unc-other","cwd":"\\\\server\\share\\repo.featurette"},{"pane_id":"p-unc-share","cwd":"\\\\server\\share2\\repo.feature"}]}}'
+  Clear-WtStubLog
+  Close-WorktrunkWorktreeUi '' '\\server\share\repo.feature'
+  if ((Get-WtStubLog) -cne 'pane close p-unc') { Fail "unexpected UNC pane close calls:`n$(Get-WtStubLog)" }
+
+  # A bare server or share is a root like "/": it would match every pane on the
+  # share, so it is refused outright in every UNC form.
+  foreach ($root in @('\\server\share', '//server/share/', '\\?\UNC\server\share\', '\\server')) {
+    Clear-WtStubLog
+    Close-WorktrunkWorktreeUi '' $root
+    if (Get-WtStubLog) { Fail "expected no close calls for '$root', got:`n$(Get-WtStubLog)" }
+  }
 } finally {
   $env:HERDR_BIN_PATH = $null
   $env:HERDR_WORKTREE_JSON = $null

@@ -117,5 +117,33 @@ foreach ($root in @('/', 'C:', 'C:\', 'c:/', '')) {
 }
 if (Test-WtRootPath 'C:\repo') { Fail 'expected a real path not to be treated as a root' }
 
+# UNC paths (a worktree on a network share): the extended-length \\?\UNC\ form,
+# the backslash form and the forward-slash form all compare as //server/share.
+foreach ($unc in @('\\?\UNC\server\share\repo', '\\server\share\repo\', '//server/share/repo/')) {
+  $got = ConvertTo-WtComparablePath $unc
+  if ($got -cne '//server/share/repo') { Fail "expected '$unc' to normalize to //server/share/repo, got '$got'" }
+}
+foreach ($case in @(
+    @('\\server\share\', '//server/share'),
+    @('\\?\UNC\server\share\', '//server/share'),
+    @('\\server\', '//server'),
+    @('\\', '//'),
+    @('///', '//'))) {
+  $got = ConvertTo-WtComparablePath $case[0]
+  if ($got -cne $case[1]) { Fail "expected '$($case[0])' to keep its leading // as '$($case[1])', got '$got'" }
+}
+if (-not (Test-WtPathPrefix '\\?\UNC\Server\Share\repo.feature\sub' '//server/share/repo.feature')) { Fail 'expected \\?\UNC\ containment to match the forward-slash UNC form' }
+if (-not (Test-WtPathPrefix '//server/share/repo.feature/sub' '\\?\UNC\server\share\repo.feature')) { Fail 'expected forward-slash UNC containment to match the \\?\UNC\ form' }
+if (-not (Test-WtPathPrefix '\\SERVER\share\repo.feature' '\\?\UNC\server\SHARE\repo.feature\')) { Fail 'expected the UNC path itself to match across forms and case' }
+if (Test-WtPathPrefix '//server/share/repo.feature-two' '\\server\share\repo.feature') { Fail 'expected a UNC sibling with a shared prefix not to match' }
+if (Test-WtPathPrefix '\\server\share2\repo' '\\?\UNC\server\share') { Fail 'expected a sibling share with a shared prefix not to match' }
+if (Test-WtPathPrefix '\\server2\share\repo' '//server/share') { Fail 'expected another server with a shared prefix not to match' }
+foreach ($root in @('\\server\share', '\\server\share\', '//server/share/', '\\?\UNC\server\share', '\\?\UNC\server\share\', '\\server', '//server/', '\\?\UNC\server', '\\')) {
+  if (-not (Test-WtRootPath $root)) { Fail "expected '$root' to be treated as a root path" }
+}
+foreach ($path in @('\\server\share\repo', '//server/share/repo/', '\\?\UNC\server\share\repo')) {
+  if (Test-WtRootPath $path) { Fail "expected '$path' not to be treated as a root" }
+}
+
 Write-Output 'helpers tests passed'
 exit 0
