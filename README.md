@@ -214,6 +214,12 @@ preview).
 
 ### Windows
 
+Windows support can lag behind macOS and Linux, and a new feature may be
+missing on Windows for a while. Features land in the bash scripts first; their
+PowerShell ports come from contributors who can test on Windows. If something
+works on macOS or Linux but not on Windows, open an issue and say it is
+Windows.
+
 The actions run as Windows PowerShell 5.1 scripts (`*.ps1`) — nothing beyond
 stock Windows is needed for the scripts themselves, and jq is not used. Install
 the two external tools with winget:
